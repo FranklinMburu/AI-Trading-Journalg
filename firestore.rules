@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    function isValidTrade(data) {
+      return data.userId == request.auth.uid &&
+             data.symbol is string && data.symbol.size() > 0 &&
+             data.entryPrice is number && data.entryPrice > 0 &&
+             data.quantity is number && data.quantity > 0 &&
+             data.direction in ['LONG', 'SHORT'] &&
+             data.status in ['OPEN', 'CLOSED'] &&
+             data.entryTime is string;
+    }
+    function isValidJournalEntry(data) {
+      return data.userId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 &&
+             data.timestamp is string;
+    }
+    function isValidStrategy(data) {
+      return data.userId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 &&
+             (!('rules' in data) || (data.rules is string && data.rules.size() <= 2000)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+    }
+    function isValidUserStats(data) {
+      return data.userId == request.auth.uid;
+    }
+    function isValidGoal(data) {
+      return data.userId == request.auth.uid &&
+             data.type in ['daily', 'weekly'] &&
+             data.target is number && data.target > 0 &&
+             data.startDate is string &&
+             data.endDate is string;
+    }
+
+    // Trades
+    match /trades/{tradeId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidTrade(request.resource.data);
+      allow update: if isDocOwner() && isValidTrade(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    // Journal Entries
+    match /journal_entries/{entryId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidJournalEntry(request.resource.data);
+      allow update: if isDocOwner() && isValidJournalEntry(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    // Strategies
+    match /strategies/{strategyId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidStrategy(request.resource.data);
+      allow update: if isDocOwner() && isValidStrategy(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+
+    // User Stats
+    match /user_stats/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidUserStats(request.resource.data);
+    }
+
+    // Goals
+    match /goals/{goalId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidGoal(request.resource.data);
+      allow update: if isDocOwner() && isValidGoal(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+  }
+}

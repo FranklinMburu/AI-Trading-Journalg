@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@layer components {
+  .markdown-body {
+    @apply prose prose-invert max-w-none;
+    @apply prose-p:text-zinc-300 prose-headings:text-zinc-100 prose-strong:text-emerald-500;
+  }
+}

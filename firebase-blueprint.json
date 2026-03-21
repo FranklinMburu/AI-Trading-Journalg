@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "Trade": {
+      "title": "Trade",
+      "description": "A single trading transaction record.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "entryPrice": { "type": "number" },
+        "exitPrice": { "type": "number" },
+        "quantity": { "type": "number" },
+        "direction": { "type": "string", "enum": ["LONG", "SHORT"] },
+        "status": { "type": "string", "enum": ["OPEN", "CLOSED"] },
+        "pnl": { "type": "number" },
+        "entryTime": { "type": "string", "format": "date-time" },
+        "exitTime": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" },
+        "strategyId": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["userId", "symbol", "entryPrice", "quantity", "direction", "status", "entryTime"]
+    },
+    "JournalEntry": {
+      "title": "Journal Entry",
+      "description": "A daily or trade-specific journal entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "tradeId": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "mood": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["userId", "content", "timestamp"]
+    },
+    "Strategy": {
+      "title": "Strategy",
+      "description": "A trading strategy definition.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "rules": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["userId", "name"]
+    },
+    "UserStats": {
+      "title": "User Stats",
+      "description": "Aggregated performance statistics for a user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "totalProfit": { "type": "number" },
+        "winRate": { "type": "number" },
+        "totalTrades": { "type": "number" },
+        "profitFactor": { "type": "number" },
+        "avgProfit": { "type": "number" },
+        "equityCurve": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time": { "type": "string", "format": "date-time" },
+              "value": { "type": "number" },
+              "cumulative": { "type": "number" }
+            }
+          }
+        }
+      },
+      "required": ["userId"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "A trading goal (daily or weekly profit target).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["daily", "weekly"] },
+        "target": { "type": "number" },
+        "current": { "type": "number" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "achieved": { "type": "boolean" }
+      },
+      "required": ["userId", "type", "target", "startDate", "endDate"]
+    }
+  },
+  "firestore": {
+    "/trades/{tradeId}": {
+      "schema": "Trade",
+      "description": "Collection of user trades."
+    },
+    "/journal_entries/{entryId}": {
+      "schema": "JournalEntry",
+      "description": "Collection of journal entries."
+    },
+    "/strategies/{strategyId}": {
+      "schema": "Strategy",
+      "description": "Collection of trading strategies."
+    },
+    "/user_stats/{userId}": {
+      "schema": "UserStats",
+      "description": "User performance statistics."
+    },
+    "/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "User trading goals."
+    }
+  }
+}
