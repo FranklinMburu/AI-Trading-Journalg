@@ -57,36 +57,53 @@
         "totalProfit": { "type": "number" },
         "winRate": { "type": "number" },
         "totalTrades": { "type": "number" },
-        "profitFactor": { "type": "number" },
-        "avgProfit": { "type": "number" },
         "equityCurve": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
               "time": { "type": "string", "format": "date-time" },
-              "value": { "type": "number" },
-              "cumulative": { "type": "number" }
+              "value": { "type": "number" }
             }
           }
         }
       },
       "required": ["userId"]
     },
-    "Goal": {
-      "title": "Goal",
-      "description": "A trading goal (daily or weekly profit target).",
+    "UserSettings": {
+      "title": "User Settings",
+      "description": "User preferences and goals.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
-        "type": { "type": "string", "enum": ["daily", "weekly"] },
-        "target": { "type": "number" },
-        "current": { "type": "number" },
-        "startDate": { "type": "string", "format": "date-time" },
-        "endDate": { "type": "string", "format": "date-time" },
-        "achieved": { "type": "boolean" }
+        "currency": { "type": "string" },
+        "dailyGoal": { "type": "number" },
+        "weeklyGoal": { "type": "number" },
+        "notifications": {
+          "type": "object",
+          "properties": {
+            "tp_hit": { "type": "boolean" },
+            "sl_hit": { "type": "boolean" },
+            "goal_reached": { "type": "boolean" },
+            "daily_summary": { "type": "boolean" }
+          }
+        }
       },
-      "required": ["userId", "type", "target", "startDate", "endDate"]
+      "required": ["userId", "currency", "dailyGoal", "weeklyGoal", "notifications"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and role.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "createdAt"]
     }
   },
   "firestore": {
@@ -106,9 +123,13 @@
       "schema": "UserStats",
       "description": "User performance statistics."
     },
-    "/goals/{goalId}": {
-      "schema": "Goal",
-      "description": "User trading goals."
+    "/settings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "User settings and preferences."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
     }
   }
 }

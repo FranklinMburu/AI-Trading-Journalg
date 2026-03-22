@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { JournalEntry, Trade } from '../types';
 import { BookOpen, Plus, Calendar, Smile, Tag, Save, X, Link as LinkIcon, TrendingUp, TrendingDown, Edit2, Trash2, ExternalLink, Info } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn, formatCurrency } from '../lib/utils';
 
-export default function Journal({ userId }: { userId: string }) {
+export default function Journal({ userId, initialTradeId, onClearInitialTrade }: { userId: string, initialTradeId?: string, onClearInitialTrade?: () => void }) {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
@@ -17,6 +17,14 @@ export default function Journal({ userId }: { userId: string }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [selectedTradeId, setSelectedTradeId] = useState<string>('');
   const [viewingTrade, setViewingTrade] = useState<Trade | null>(null);
+
+  useEffect(() => {
+    if (initialTradeId) {
+      setSelectedTradeId(initialTradeId);
+      setIsAdding(true);
+      if (onClearInitialTrade) onClearInitialTrade();
+    }
+  }, [initialTradeId]);
 
   const addTag = () => {
     if (tagInput.trim() && !tags.includes(tagInput.trim())) {
@@ -38,6 +46,8 @@ export default function Journal({ userId }: { userId: string }) {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setEntries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as JournalEntry)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'journal_entries');
     });
 
     const tradesQuery = query(
@@ -48,6 +58,8 @@ export default function Journal({ userId }: { userId: string }) {
 
     const unsubscribeTrades = onSnapshot(tradesQuery, (snapshot) => {
       setTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'trades');
     });
 
     return () => {
@@ -76,7 +88,7 @@ export default function Journal({ userId }: { userId: string }) {
 
       resetForm();
     } catch (error) {
-      console.error('Error saving journal entry:', error);
+      handleFirestoreError(error, editingEntry?.id ? OperationType.UPDATE : OperationType.CREATE, 'journal_entries');
     }
   };
 
@@ -104,7 +116,7 @@ export default function Journal({ userId }: { userId: string }) {
     try {
       await deleteDoc(doc(db, 'journal_entries', id));
     } catch (error) {
-      console.error('Error deleting journal entry:', error);
+      handleFirestoreError(error, OperationType.DELETE, 'journal_entries');
     }
   };
 
@@ -288,7 +300,8 @@ export default function Journal({ userId }: { userId: string }) {
         {entries.length === 0 && !isAdding && (
           <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
             <BookOpen size={48} className="mb-4 opacity-20" />
-            <p>Your journal is empty. Start writing about your trading journey.</p>
+            <p className="mb-2">Your journal is empty. Start writing about your trading journey.</p>
+            <p className="text-sm opacity-60">Tip: You can link specific trades to your entries from the Trade History tab.</p>
           </div>
         )}
       </div>

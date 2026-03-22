@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { TradeDirection, TradeStatus, Strategy } from '../types';
-import { X, Save } from 'lucide-react';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+import { X, Save, Calculator, Shield } from 'lucide-react';
 import { formatCurrency, cn } from '../lib/utils';
+import RiskCalculator from './RiskCalculator';
 
 interface TradeFormProps {
   userId: string;
@@ -14,6 +14,7 @@ interface TradeFormProps {
 export default function TradeForm({ userId, onClose }: TradeFormProps) {
   const [loading, setLoading] = useState(false);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [showRiskCalc, setShowRiskCalc] = useState(false);
   const [formData, setFormData] = useState({
     symbol: '',
     entryPrice: '',
@@ -42,7 +43,74 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
     }
   };
 
+  const calculateRisk = () => {
+    const entry = parseFloat(formData.entryPrice);
+    const sl = parseFloat(formData.stopLoss);
+    const qty = parseFloat(formData.quantity);
+    
+    if (isNaN(entry) || isNaN(sl) || isNaN(qty)) return null;
+    
+    if (formData.direction === 'LONG') {
+      return (entry - sl) * qty;
+    } else {
+      return (sl - entry) * qty;
+    }
+  };
+
+  const calculateReward = () => {
+    const entry = parseFloat(formData.entryPrice);
+    const tp = parseFloat(formData.takeProfit);
+    const qty = parseFloat(formData.quantity);
+    
+    if (isNaN(entry) || isNaN(tp) || isNaN(qty)) return null;
+    
+    if (formData.direction === 'LONG') {
+      return (tp - entry) * qty;
+    } else {
+      return (entry - tp) * qty;
+    }
+  };
+
   const currentPnL = calculatePnL();
+  const currentRisk = calculateRisk();
+  const currentReward = calculateReward();
+  const rrRatio = currentRisk && currentReward && currentRisk > 0 ? (currentReward / currentRisk).toFixed(2) : null;
+
+  const isInvalidSL = () => {
+    const entry = parseFloat(formData.entryPrice);
+    const sl = parseFloat(formData.stopLoss);
+    if (isNaN(entry) || isNaN(sl)) return false;
+    return formData.direction === 'LONG' ? sl >= entry : sl <= entry;
+  };
+
+  const isInvalidTP = () => {
+    const entry = parseFloat(formData.entryPrice);
+    const tp = parseFloat(formData.takeProfit);
+    if (isNaN(entry) || isNaN(tp)) return false;
+    return formData.direction === 'LONG' ? tp <= entry : tp >= entry;
+  };
+
+  const getVisualizerData = () => {
+    const entry = parseFloat(formData.entryPrice);
+    const sl = parseFloat(formData.stopLoss);
+    const tp = parseFloat(formData.takeProfit);
+    if (isNaN(entry) || isNaN(sl) || isNaN(tp)) return null;
+
+    const min = Math.min(entry, sl, tp);
+    const max = Math.max(entry, sl, tp);
+    const range = max - min;
+
+    const getPos = (val: number) => ((val - min) / range) * 100;
+
+    return {
+      slPos: getPos(sl),
+      entryPos: getPos(entry),
+      tpPos: getPos(tp),
+      isLong: formData.direction === 'LONG'
+    };
+  };
+
+  const visualizer = getVisualizerData();
 
   useEffect(() => {
     const fetchStrategies = async () => {
@@ -146,7 +214,17 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Quantity</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Quantity</label>
+                <button 
+                  type="button"
+                  onClick={() => setShowRiskCalc(!showRiskCalc)}
+                  className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 hover:text-emerald-400"
+                >
+                  <Calculator size={10} />
+                  Risk Calc
+                </button>
+              </div>
               <input
                 required
                 type="number"
@@ -158,6 +236,18 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
               />
             </div>
           </div>
+
+          {showRiskCalc && (
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 animate-in slide-in-from-top duration-300">
+              <RiskCalculator 
+                userId={userId} 
+                compact
+                entryPrice={parseFloat(formData.entryPrice) || undefined}
+                stopLossPrice={parseFloat(formData.stopLoss) || undefined}
+                onCalculate={(size) => setFormData(prev => ({ ...prev, quantity: size.toString() }))}
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
@@ -182,12 +272,13 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
                 value={formData.exitPrice}
                 onChange={(e) => setFormData({ ...formData, exitPrice: e.target.value })}
               />
-              {formData.status === 'CLOSED' && formData.exitPrice && currentPnL !== null && (
+              {formData.exitPrice && currentPnL !== null && (
                 <div className={cn(
-                  "text-xs font-bold mt-1",
+                  "text-xs font-bold mt-1 flex items-center justify-between",
                   currentPnL >= 0 ? "text-emerald-400" : "text-rose-400"
                 )}>
-                  Estimated PnL: {formatCurrency(currentPnL)}
+                  <span>Estimated PnL:</span>
+                  <span>{formatCurrency(currentPnL)}</span>
                 </div>
               )}
             </div>
@@ -200,10 +291,22 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
                 type="number"
                 step="any"
                 placeholder="0.00"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className={cn(
+                  "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
+                  isInvalidSL() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
+                )}
                 value={formData.stopLoss}
                 onChange={(e) => setFormData({ ...formData, stopLoss: e.target.value })}
               />
+              {isInvalidSL() && (
+                <p className="text-[10px] text-rose-500 font-bold">SL must be {formData.direction === 'LONG' ? 'below' : 'above'} entry</p>
+              )}
+              {currentRisk !== null && (
+                <div className="text-[10px] font-medium text-rose-400 mt-1 flex items-center justify-between">
+                  <span>Risk:</span>
+                  <span>{formatCurrency(currentRisk)} ({((currentRisk / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
+                </div>
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Take Profit</label>
@@ -211,12 +314,71 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
                 type="number"
                 step="any"
                 placeholder="0.00"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className={cn(
+                  "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
+                  isInvalidTP() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
+                )}
                 value={formData.takeProfit}
                 onChange={(e) => setFormData({ ...formData, takeProfit: e.target.value })}
               />
+              {isInvalidTP() && (
+                <p className="text-[10px] text-rose-500 font-bold">TP must be {formData.direction === 'LONG' ? 'above' : 'below'} entry</p>
+              )}
+              {currentReward !== null && (
+                <div className="text-[10px] font-medium text-emerald-400 mt-1 flex items-center justify-between">
+                  <span>Reward:</span>
+                  <span>{formatCurrency(currentReward)} ({((currentReward / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
+                </div>
+              )}
             </div>
           </div>
+
+          {visualizer && (
+            <div className="space-y-2 py-2">
+              <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                <span>Setup Visualizer</span>
+                <span className={cn(
+                  "px-1.5 py-0.5 rounded bg-zinc-800",
+                  parseFloat(rrRatio || '0') >= 2 ? "text-emerald-500" : "text-zinc-400"
+                )}>
+                  R:R 1:{rrRatio}
+                </span>
+              </div>
+              <div className="relative h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                {/* Visualizer Bar */}
+                <div 
+                  className={cn(
+                    "absolute h-full transition-all duration-500",
+                    visualizer.isLong ? "bg-emerald-500/20" : "bg-rose-500/20"
+                  )}
+                  style={{ 
+                    left: `${Math.min(visualizer.slPos, visualizer.tpPos)}%`, 
+                    width: `${Math.abs(visualizer.tpPos - visualizer.slPos)}%` 
+                  }}
+                />
+                {/* Entry Point */}
+                <div 
+                  className="absolute top-0 h-full w-1 bg-white z-10 shadow-[0_0_8px_rgba(255,255,255,0.5)]"
+                  style={{ left: `${visualizer.entryPos}%` }}
+                />
+                {/* SL Point */}
+                <div 
+                  className="absolute top-0 h-full w-1 bg-rose-500 z-10"
+                  style={{ left: `${visualizer.slPos}%` }}
+                />
+                {/* TP Point */}
+                <div 
+                  className="absolute top-0 h-full w-1 bg-emerald-500 z-10"
+                  style={{ left: `${visualizer.tpPos}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-zinc-500">
+                <span>SL</span>
+                <span>ENTRY</span>
+                <span>TP</span>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">

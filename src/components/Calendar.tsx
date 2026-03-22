@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade } from '../types';
 import { 
   format, 
@@ -33,6 +33,8 @@ export default function Calendar({ userId }: { userId: string }) {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'trades');
     });
 
     return () => unsubscribe();

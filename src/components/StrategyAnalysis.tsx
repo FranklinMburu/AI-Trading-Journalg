@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, Strategy } from '../types';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LineChart, Line, Legend } from 'recharts';
-import { Target, TrendingUp, AlertCircle, Plus, Save, X, Activity, CheckSquare, Square, BookOpen, Database } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { Target, TrendingUp, AlertCircle, Plus, Save, X, Activity, CheckSquare, Square, BookOpen, Database, Sparkles } from 'lucide-react';
+import Markdown from 'react-markdown';
 import { GoogleGenAI, Type } from "@google/genai";
+import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '../services/aiService';
 
 interface StrategyStats {
   id: string;
@@ -14,11 +15,22 @@ interface StrategyStats {
   rules: string;
   totalPnL: number;
   winRate: number;
+  profitFactor: number;
   tradeCount: number;
   avgPnL: number;
-  equityCurve: { tradeIndex: number; cumulativePnL: number }[];
-  tradePnLs: { tradeIndex: number; pnl: number; symbol: string }[];
+  equityCurve: { tradeIndex: number; cumulativePnL: number; time?: string }[];
+  tradePnLs: { tradeIndex: number; pnl: number; symbol: string; time: string }[];
   createdAt: string;
+}
+
+interface BacktestResult {
+  strategyName: string;
+  totalPnL: number;
+  winRate: number;
+  profitFactor: number;
+  tradeCount: number;
+  equityCurve: { tradeIndex: number; cumulativePnL: number; time: string }[];
+  trades: Trade[];
 }
 
 export default function StrategyAnalysis({ userId }: { userId: string }) {
@@ -33,6 +45,14 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string>>(new Set());
   const [viewingStrategy, setViewingStrategy] = useState<StrategyStats | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isBacktesting, setIsBacktesting] = useState(false);
+  const [backtestStrategyId, setBacktestStrategyId] = useState('');
+  const [backtestStartDate, setBacktestStartDate] = useState('');
+  const [backtestEndDate, setBacktestEndDate] = useState('');
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [isRunningBacktest, setIsRunningBacktest] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,16 +93,15 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       setSelectedTradeIds(new Set());
       setIsAdding(false);
     } catch (error) {
-      console.error('Error adding strategy:', error);
+      handleFirestoreError(error, OperationType.CREATE, 'strategies');
     }
   };
 
   const handleSeedXAUUSDData = async () => {
     setIsSeeding(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await generateContent({
+        model: AI_MODELS.FLASH,
         contents: "Generate 10 realistic XAU/USD trades for the past month (Feb 21 - Mar 21, 2026). Use real historical prices from Google Search. Return a JSON array of objects with: symbol, entryPrice, exitPrice, quantity (0.1-1.0), direction (LONG/SHORT), status (CLOSED), pnl, entryTime (ISO), exitTime (ISO), and brief notes on market rationale. Today is March 21, 2026.",
         config: {
           responseMimeType: "application/json",
@@ -132,8 +151,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       await Promise.all(tradePromises);
       alert('Successfully seeded XAU/USD trades for the last month!');
     } catch (error) {
-      console.error('Error seeding data:', error);
-      alert('Failed to seed data. Check console for details.');
+      handleFirestoreError(error, OperationType.WRITE, 'trades');
     } finally {
       setIsSeeding(false);
     }
@@ -165,6 +183,8 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
         });
       });
       setStrategiesMap(sMap);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'strategies');
     });
   }, [userId]);
 
@@ -172,6 +192,8 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
     const q = query(collection(db, 'trades'), where('userId', '==', userId));
     return onSnapshot(q, (snapshot) => {
       setRawTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'trades');
     });
   }, [userId]);
 
@@ -200,19 +222,24 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       const wins = trades.filter(t => (t.pnl || 0) > 0).length;
       const winRate = trades.length > 0 ? wins / trades.length : 0;
       
+      const grossProfits = trades.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + (t.pnl || 0), 0);
+      const grossLosses = Math.abs(trades.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + (t.pnl || 0), 0));
+      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? 10 : 0) : grossProfits / grossLosses;
+
       let cumulative = 0;
       const equityCurve = trades.map((t, index) => {
         cumulative += (t.pnl || 0);
-        return { tradeIndex: index + 1, cumulativePnL: cumulative };
+        return { tradeIndex: index + 1, cumulativePnL: cumulative, time: t.entryTime };
       });
 
       const tradePnLs = trades.map((t, index) => ({
         tradeIndex: index + 1,
         pnl: t.pnl || 0,
-        symbol: t.symbol
+        symbol: t.symbol,
+        time: t.entryTime
       }));
 
-      equityCurve.unshift({ tradeIndex: 0, cumulativePnL: 0 });
+      equityCurve.unshift({ tradeIndex: 0, cumulativePnL: 0, time: trades[0]?.entryTime || '' });
       
       const strategyInfo = strategiesMap.get(sId);
       calculatedStats.push({
@@ -221,6 +248,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
         rules: strategyInfo?.rules || '',
         totalPnL,
         winRate,
+        profitFactor,
         tradeCount: trades.length,
         avgPnL: trades.length > 0 ? totalPnL / trades.length : 0,
         equityCurve,
@@ -240,6 +268,96 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
     const matchesEndDate = !endDate || strategyDate <= new Date(endDate + 'T23:59:59');
     return matchesName && matchesStartDate && matchesEndDate;
   });
+
+  const handleRunBacktest = () => {
+    if (!backtestStrategyId) return;
+    setIsRunningBacktest(true);
+    
+    setTimeout(() => {
+      const strategyTrades = rawTrades.filter(t => 
+        t.strategyId === backtestStrategyId && 
+        t.status === 'CLOSED' &&
+        (!backtestStartDate || new Date(t.entryTime) >= new Date(backtestStartDate)) &&
+        (!backtestEndDate || new Date(t.entryTime) <= new Date(backtestEndDate + 'T23:59:59'))
+      ).sort((a, b) => new Date(a.entryTime).getTime() - new Date(b.entryTime).getTime());
+
+      const totalPnL = strategyTrades.reduce((acc, t) => acc + (t.pnl || 0), 0);
+      const wins = strategyTrades.filter(t => (t.pnl || 0) > 0).length;
+      const winRate = strategyTrades.length > 0 ? wins / strategyTrades.length : 0;
+      
+      const grossProfits = strategyTrades.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + (t.pnl || 0), 0);
+      const grossLosses = Math.abs(strategyTrades.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + (t.pnl || 0), 0));
+      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? 10 : 0) : grossProfits / grossLosses;
+
+      let cumulative = 0;
+      const equityCurve = strategyTrades.map((t, index) => {
+        cumulative += (t.pnl || 0);
+        return { tradeIndex: index + 1, cumulativePnL: cumulative, time: t.entryTime };
+      });
+      equityCurve.unshift({ tradeIndex: 0, cumulativePnL: 0, time: backtestStartDate || strategyTrades[0]?.entryTime || '' });
+
+      setBacktestResult({
+        strategyName: strategiesMap.get(backtestStrategyId)?.name || 'Unknown',
+        totalPnL,
+        winRate,
+        profitFactor,
+        tradeCount: strategyTrades.length,
+        equityCurve,
+        trades: strategyTrades
+      });
+      setIsRunningBacktest(false);
+    }, 800);
+  };
+
+  const handleAiAnalysis = async () => {
+    if (!backtestResult) return;
+
+    const cacheKey = `strategy_analysis_${userId}_${backtestStrategyId}_${backtestResult.tradeCount}`;
+    const cached = getCache(cacheKey);
+    const contextHash = `${backtestResult.tradeCount}_${backtestResult.totalPnL}`;
+
+    if (isCacheValid(cached, 24 * 60 * 60 * 1000, contextHash)) {
+      setAiAnalysis(cached?.data);
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      const prompt = `
+        As a professional trading performance analyst, evaluate this trading strategy based on its backtest results.
+        
+        Strategy Name: ${backtestResult.strategyName}
+        Strategy Rules: ${strategiesMap.get(backtestStrategyId)?.rules || 'No rules defined'}
+        
+        Performance Metrics:
+        - Total PnL: ${formatCurrency(backtestResult.totalPnL)}
+        - Win Rate: ${formatPercent(backtestResult.winRate)}
+        - Profit Factor: ${backtestResult.profitFactor.toFixed(2)}
+        - Total Trades: ${backtestResult.tradeCount}
+        - Avg. Trade: ${formatCurrency(backtestResult.totalPnL / backtestResult.tradeCount)}
+        
+        Please provide:
+        1. A critical assessment of the strategy's performance.
+        2. Identification of potential flaws or risks based on the rules and results.
+        3. Specific, actionable recommendations to improve the Win Rate or Profit Factor.
+        4. An overall "Strategy Score" out of 100.
+        
+        Format the response in clean Markdown.
+      `;
+
+      const result = await generateContent({
+        model: AI_MODELS.FLASH,
+        contents: prompt
+      });
+      setAiAnalysis(result.text);
+      setCache(cacheKey, result.text, contextHash);
+    } catch (error) {
+      console.error('AI Analysis error:', error);
+      setAiAnalysis('Failed to generate AI analysis. Please check your API key and try again.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -264,6 +382,13 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setIsBacktesting(true)}
+            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <Activity size={16} />
+            Backtest Strategy
+          </button>
           <button 
             onClick={handleSeedXAUUSDData}
             disabled={isSeeding}
@@ -566,6 +691,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
                 <th className="px-6 py-4 font-medium">Strategy Name</th>
                 <th className="px-6 py-4 font-medium">Trades</th>
                 <th className="px-6 py-4 font-medium">Win Rate</th>
+                <th className="px-6 py-4 font-medium">Profit Factor</th>
                 <th className="px-6 py-4 font-medium">Total PnL</th>
                 <th className="px-6 py-4 font-medium">Avg. PnL</th>
                 <th className="px-6 py-4 font-medium">Performance</th>
@@ -578,6 +704,12 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
                   <td className="px-6 py-4 font-semibold">{s.name}</td>
                   <td className="px-6 py-4 text-zinc-300">{s.tradeCount}</td>
                   <td className="px-6 py-4 text-zinc-300">{formatPercent(s.winRate)}</td>
+                  <td className={cn(
+                    "px-6 py-4 font-medium",
+                    s.profitFactor >= 1.5 ? "text-emerald-500" : s.profitFactor >= 1 ? "text-zinc-300" : "text-rose-500"
+                  )}>
+                    {s.profitFactor.toFixed(2)}
+                  </td>
                   <td className={cn(
                     "px-6 py-4 font-bold",
                     s.totalPnL >= 0 ? "text-emerald-500" : "text-rose-500"
@@ -619,6 +751,212 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
           </table>
         </div>
       </div>
+      {/* Backtest Modal */}
+      {isBacktesting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-zinc-800 p-4">
+              <div className="flex items-center gap-2 text-blue-500">
+                <Activity size={20} />
+                <h3 className="font-bold">Strategy Backtester</h3>
+              </div>
+              <button 
+                onClick={() => { setIsBacktesting(false); setBacktestResult(null); }}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="max-h-[80vh] overflow-y-auto p-6">
+              {!backtestResult ? (
+                <div className="space-y-6">
+                  <p className="text-sm text-zinc-400">
+                    Run a historical simulation of your strategy against your logged trade data. 
+                    This will analyze all closed trades assigned to the selected strategy within the specified date range.
+                  </p>
+                  
+                  <div className="grid gap-6 md:grid-cols-3">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Select Strategy</label>
+                      <select 
+                        value={backtestStrategyId}
+                        onChange={(e) => setBacktestStrategyId(e.target.value)}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none"
+                      >
+                        <option value="">Choose a strategy...</option>
+                        {Array.from(strategiesMap.entries()).map(([id, s]) => (
+                          <option key={id} value={id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Start Date</label>
+                      <input 
+                        type="date"
+                        value={backtestStartDate}
+                        onChange={(e) => setBacktestStartDate(e.target.value)}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">End Date</label>
+                      <input 
+                        type="date"
+                        value={backtestEndDate}
+                        onChange={(e) => setBacktestEndDate(e.target.value)}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-center pt-4">
+                    <button 
+                      onClick={handleRunBacktest}
+                      disabled={!backtestStrategyId || isRunningBacktest}
+                      className="flex items-center gap-2 rounded-xl bg-blue-600 px-8 py-3 font-bold text-white transition-all hover:bg-blue-500 disabled:opacity-50"
+                    >
+                      {isRunningBacktest ? (
+                        <>
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          Simulating...
+                        </>
+                      ) : (
+                        <>
+                          <Activity size={18} />
+                          Run Backtest
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-lg font-bold text-zinc-100">{backtestResult.strategyName}</h4>
+                      <p className="text-sm text-zinc-500">
+                        {backtestStartDate || 'Beginning'} to {backtestEndDate || 'Today'} • {backtestResult.tradeCount} Trades
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => setBacktestResult(null)}
+                      className="text-sm font-medium text-blue-500 hover:text-blue-400"
+                    >
+                      New Backtest
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">Total PnL</p>
+                      <p className={cn("text-xl font-bold", backtestResult.totalPnL >= 0 ? "text-emerald-500" : "text-rose-500")}>
+                        {formatCurrency(backtestResult.totalPnL)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">Win Rate</p>
+                      <p className="text-xl font-bold text-zinc-100">{formatPercent(backtestResult.winRate)}</p>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">Profit Factor</p>
+                      <p className={cn("text-xl font-bold", backtestResult.profitFactor >= 1.5 ? "text-emerald-500" : backtestResult.profitFactor >= 1 ? "text-zinc-100" : "text-rose-500")}>
+                        {backtestResult.profitFactor.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">Avg. Trade</p>
+                      <p className="text-xl font-bold text-zinc-100">
+                        {formatCurrency(backtestResult.tradeCount > 0 ? backtestResult.totalPnL / backtestResult.tradeCount : 0)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-500">Backtest Equity Curve</h5>
+                      <button 
+                        onClick={handleAiAnalysis}
+                        disabled={isAnalyzing}
+                        className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-500 transition-all hover:bg-emerald-500 hover:text-zinc-950 disabled:opacity-50"
+                      >
+                        {isAnalyzing ? (
+                          <>
+                            <div className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+                            Analyzing...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={14} />
+                            Get AI Insights
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    
+                    {aiAnalysis && (
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                        <div className="mb-4 flex items-center gap-2 text-emerald-500">
+                          <Sparkles size={18} />
+                          <h6 className="font-bold">AI Performance Insights</h6>
+                        </div>
+                        <div className="prose prose-invert prose-sm max-w-none prose-emerald">
+                          <Markdown>{aiAnalysis}</Markdown>
+                        </div>
+                        <button 
+                          onClick={() => setAiAnalysis(null)}
+                          className="mt-4 text-xs font-medium text-zinc-500 hover:text-zinc-300"
+                        >
+                          Dismiss Analysis
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="h-[300px] w-full rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={backtestResult.equityCurve}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                          <XAxis 
+                            dataKey="tradeIndex" 
+                            stroke="#71717a" 
+                            fontSize={10} 
+                            axisLine={false} 
+                            tickLine={false} 
+                          />
+                          <YAxis stroke="#71717a" fontSize={10} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: '8px' }}
+                            itemStyle={{ color: '#fff' }}
+                            labelFormatter={(v) => `Trade #${v}`}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="cumulativePnL"
+                            stroke="#3b82f6"
+                            strokeWidth={3}
+                            dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
+                            activeDot={{ r: 6, strokeWidth: 0 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex items-center justify-end border-t border-zinc-800 bg-zinc-900/50 p-4">
+              <button 
+                onClick={() => { setIsBacktesting(false); setBacktestResult(null); }}
+                className="rounded-lg bg-zinc-800 px-6 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Strategy Rules Modal */}
       {viewingStrategy && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -638,7 +976,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
             <div className="max-h-[70vh] overflow-y-auto p-6">
               {viewingStrategy.rules ? (
                 <div className="markdown-body prose prose-invert max-w-none">
-                  <ReactMarkdown>{viewingStrategy.rules}</ReactMarkdown>
+                  <Markdown>{viewingStrategy.rules}</Markdown>
                 </div>
               ) : (
                 <p className="text-center text-zinc-500 italic">No rules defined for this strategy.</p>

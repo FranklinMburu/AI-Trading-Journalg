@@ -8,62 +8,88 @@ service cloud.firestore {
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
+    function isAdmin() {
+      return isAuthenticated() &&
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "franklinmburu05@gmail.com" && request.auth.token.email_verified == true));
+    }
     function isDocOwner() {
       return isAuthenticated() && request.auth.uid == resource.data.userId;
     }
+    function isValidUser(data) {
+      return data.email is string &&
+             data.role in ['admin', 'user'];
+    }
     function isValidTrade(data) {
       return data.userId == request.auth.uid &&
-             data.symbol is string && data.symbol.size() > 0 &&
+             data.symbol is string && data.symbol.size() > 0 && data.symbol.size() < 20 &&
              data.entryPrice is number && data.entryPrice > 0 &&
              data.quantity is number && data.quantity > 0 &&
              data.direction in ['LONG', 'SHORT'] &&
              data.status in ['OPEN', 'CLOSED'] &&
-             data.entryTime is string;
+             data.entryTime is string &&
+             (!('exitPrice' in data) || data.exitPrice is number) &&
+             (!('pnl' in data) || data.pnl is number) &&
+             (!('exitTime' in data) || data.exitTime is string) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+             (!('strategyId' in data) || data.strategyId is string) &&
+             (!('tags' in data) || data.tags is list) &&
+             (!('stopLoss' in data) || data.stopLoss is number) &&
+             (!('takeProfit' in data) || data.takeProfit is number);
     }
     function isValidJournalEntry(data) {
       return data.userId == request.auth.uid &&
-             data.content is string && data.content.size() > 0 &&
-             data.timestamp is string;
+             data.content is string && data.content.size() > 0 && data.content.size() <= 10000 &&
+             data.timestamp is string &&
+             (!('tradeId' in data) || (data.tradeId == null || data.tradeId is string)) &&
+             (!('mood' in data) || data.mood is string) &&
+             (!('tags' in data) || data.tags is list);
     }
     function isValidStrategy(data) {
       return data.userId == request.auth.uid &&
-             data.name is string && data.name.size() > 0 &&
-             (!('rules' in data) || (data.rules is string && data.rules.size() <= 2000)) &&
-             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             (!('rules' in data) || (data.rules is string && data.rules.size() <= 10000)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+             (!('createdAt' in data) || data.createdAt is string);
     }
     function isValidUserStats(data) {
-      return data.userId == request.auth.uid;
-    }
-    function isValidGoal(data) {
       return data.userId == request.auth.uid &&
-             data.type in ['daily', 'weekly'] &&
-             data.target is number && data.target > 0 &&
-             data.startDate is string &&
-             data.endDate is string;
+             (!('totalProfit' in data) || data.totalProfit is number) &&
+             (!('winRate' in data) || data.winRate is number) &&
+             (!('totalTrades' in data) || data.totalTrades is number) &&
+             (!('equityCurve' in data) || data.equityCurve is list);
+    }
+    function isValidUserSettings(data) {
+      return data.userId == request.auth.uid &&
+             data.currency is string &&
+             data.dailyGoal is number &&
+             data.weeklyGoal is number &&
+             data.notifications is map;
     }
 
     // Trades
     match /trades/{tradeId} {
-      allow read: if isDocOwner();
+      allow read: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
       allow create: if isAuthenticated() && isValidTrade(request.resource.data);
-      allow update: if isDocOwner() && isValidTrade(request.resource.data);
-      allow delete: if isDocOwner();
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidTrade(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
     }
 
     // Journal Entries
     match /journal_entries/{entryId} {
-      allow read: if isDocOwner();
+      allow read: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
       allow create: if isAuthenticated() && isValidJournalEntry(request.resource.data);
-      allow update: if isDocOwner() && isValidJournalEntry(request.resource.data);
-      allow delete: if isDocOwner();
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidJournalEntry(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
     }
 
     // Strategies
     match /strategies/{strategyId} {
-      allow read: if isDocOwner();
+      allow read: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
       allow create: if isAuthenticated() && isValidStrategy(request.resource.data);
-      allow update: if isDocOwner() && isValidStrategy(request.resource.data);
-      allow delete: if isDocOwner();
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidStrategy(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
     }
 
     // User Stats
@@ -72,12 +98,20 @@ service cloud.firestore {
       allow write: if isOwner(userId) && isValidUserStats(request.resource.data);
     }
 
-    // Goals
-    match /goals/{goalId} {
-      allow read: if isDocOwner();
-      allow create: if isAuthenticated() && isValidGoal(request.resource.data);
-      allow update: if isDocOwner() && isValidGoal(request.resource.data);
-      allow delete: if isDocOwner();
+    // Settings
+    match /settings/{settingId} {
+      allow read: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated() && isValidUserSettings(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidUserSettings(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+      allow delete: if isAdmin();
     }
   }
 }

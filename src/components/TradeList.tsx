@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc, getDocs, updateDoc, writeBatch } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, Strategy } from '../types';
 import { formatCurrency } from '../lib/utils';
-import { Trash2, Calendar, Tag, History as HistoryIcon, Target, AlertTriangle, X as XIcon, Search, Filter, Download, CheckCircle2 } from 'lucide-react';
+import { Trash2, Calendar, Tag, History as HistoryIcon, Target, AlertTriangle, X as XIcon, Search, Filter, Download, CheckCircle2, BookOpen, RefreshCw, Shield } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
+import { UserSettings } from '../types';
 
-export default function TradeList({ userId }: { userId: string }) {
+export default function TradeList({ userId, onJournalTrade }: { userId: string, onJournalTrade?: (id: string) => void }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Map<string, string>>(new Map());
   const [tradeToDelete, setTradeToDelete] = useState<string | null>(null);
@@ -17,13 +18,24 @@ export default function TradeList({ userId }: { userId: string }) {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [selectedPairs, setSelectedPairs] = useState<string[]>([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
+    const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
+    const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setSettings(snapshot.docs[0].data() as UserSettings);
+      }
+    });
+
     const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, (doc.data() as Strategy).name));
       setStrategies(sMap);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'strategies');
     });
 
     const tradesQuery = query(
@@ -34,13 +46,48 @@ export default function TradeList({ userId }: { userId: string }) {
 
     const unsubscribeTrades = onSnapshot(tradesQuery, (snapshot) => {
       setTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'trades');
     });
 
     return () => {
       unsubscribeStrategies();
       unsubscribeTrades();
+      unsubscribeSettings();
     };
   }, [userId]);
+
+  const handleBrokerSync = async () => {
+    if (!settings?.brokerConfig?.isActive || !settings.brokerConfig.metaApiToken || !settings.brokerConfig.accountId) {
+      alert('Please configure and enable your Broker Connection in Settings first.');
+      return;
+    }
+
+    setSyncing(true);
+    try {
+      const response = await fetch('/api/broker/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          metaApiToken: settings.brokerConfig.metaApiToken,
+          accountId: settings.brokerConfig.accountId
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert(data.message);
+      } else {
+        throw new Error(data.error || 'Sync failed');
+      }
+    } catch (error) {
+      console.error('Broker sync error:', error);
+      alert('Failed to sync with broker. Please check your MetaApi credentials in Settings.');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!tradeToDelete) return;
@@ -48,7 +95,7 @@ export default function TradeList({ userId }: { userId: string }) {
       await deleteDoc(doc(db, 'trades', tradeToDelete));
       setTradeToDelete(null);
     } catch (error) {
-      console.error('Error deleting trade:', error);
+      handleFirestoreError(error, OperationType.DELETE, 'trades');
     }
   };
 
@@ -72,7 +119,7 @@ export default function TradeList({ userId }: { userId: string }) {
         pnl
       });
     } catch (error) {
-      console.error('Error closing trade:', error);
+      handleFirestoreError(error, OperationType.UPDATE, 'trades');
     }
   };
 
@@ -103,7 +150,7 @@ export default function TradeList({ userId }: { userId: string }) {
     try {
       await batch.commit();
     } catch (error) {
-      console.error('Error closing all trades:', error);
+      handleFirestoreError(error, OperationType.WRITE, 'trades');
     }
   };
 
@@ -146,8 +193,36 @@ export default function TradeList({ userId }: { userId: string }) {
 
   const uniquePairs = Array.from(new Set(trades.map(t => t.symbol)));
 
+  const filteredStats = useMemo(() => {
+    const closed = filteredTrades.filter(t => t.status === 'CLOSED');
+    const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+    const wins = closed.filter(t => (t.pnl || 0) > 0).length;
+    const wr = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+    const maxPnL = Math.max(...closed.map(t => Math.abs(t.pnl || 0)), 1);
+    
+    return { pnl, wr, count: closed.length, maxPnL };
+  }, [filteredTrades]);
+
   return (
     <div className="space-y-6">
+      {/* Summary Header */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Filtered PnL</p>
+          <p className={cn("text-xl font-bold", filteredStats.pnl >= 0 ? "text-emerald-500" : "text-rose-500")}>
+            {formatCurrency(filteredStats.pnl)}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Filtered Win Rate</p>
+          <p className="text-xl font-bold text-blue-500">{filteredStats.wr.toFixed(1)}%</p>
+        </div>
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Trade Count</p>
+          <p className="text-xl font-bold text-zinc-100">{filteredStats.count} Closed / {filteredTrades.length - filteredStats.count} Open</p>
+        </div>
+      </div>
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-xl font-bold">Trade History</h3>
@@ -168,11 +243,16 @@ export default function TradeList({ userId }: { userId: string }) {
             onClick={() => setIsFilterOpen(!isFilterOpen)}
             className={cn(
               "flex items-center gap-2 rounded-xl border border-zinc-800 px-4 py-2 text-sm font-medium transition-all hover:bg-zinc-800",
-              isFilterOpen && "bg-zinc-800 border-emerald-500/50"
+              (isFilterOpen || filterDirection !== 'ALL' || filterStatus !== 'ALL' || selectedPairs.length > 0) && "bg-zinc-800 border-emerald-500/50"
             )}
           >
-            <Filter size={16} />
+            <Filter size={16} className={cn((filterDirection !== 'ALL' || filterStatus !== 'ALL' || selectedPairs.length > 0) && "text-emerald-500")} />
             Filters
+            {(filterDirection !== 'ALL' || filterStatus !== 'ALL' || selectedPairs.length > 0) && (
+              <span className="ml-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-zinc-950">
+                {(filterDirection !== 'ALL' ? 1 : 0) + (filterStatus !== 'ALL' ? 1 : 0) + (selectedPairs.length > 0 ? 1 : 0)}
+              </span>
+            )}
           </button>
           <button 
             onClick={exportToCSV}
@@ -201,68 +281,77 @@ export default function TradeList({ userId }: { userId: string }) {
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden"
           >
-            <div className="grid grid-cols-1 gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 md:grid-cols-3">
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Direction</label>
-                <div className="flex gap-2">
-                  {['ALL', 'LONG', 'SHORT'].map(d => (
-                    <button
-                      key={d}
-                      onClick={() => setFilterDirection(d)}
-                      className={cn(
-                        "flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-                        filterDirection === d ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
-                      )}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
+              <div className="mb-6 flex items-center justify-between">
+                <h4 className="text-sm font-bold uppercase tracking-wider text-zinc-400">Filter Trades</h4>
+                {(filterDirection !== 'ALL' || filterStatus !== 'ALL' || selectedPairs.length > 0) && (
+                  <button 
+                    onClick={() => {
+                      setFilterDirection('ALL');
+                      setFilterStatus('ALL');
+                      setSelectedPairs([]);
+                    }}
+                    className="text-xs font-bold text-rose-500 hover:text-rose-400"
+                  >
+                    Reset All Filters
+                  </button>
+                )}
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Status</label>
-                <div className="flex gap-2">
-                  {['ALL', 'OPEN', 'CLOSED'].map(s => (
-                    <button
-                      key={s}
-                      onClick={() => setFilterStatus(s)}
-                      className={cn(
-                        "flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-                        filterStatus === s ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
-                      )}
-                    >
-                      {s}
-                    </button>
-                  ))}
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Direction</label>
+                  <div className="flex gap-2">
+                    {['ALL', 'LONG', 'SHORT'].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setFilterDirection(d)}
+                        className={cn(
+                          "flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
+                          filterDirection === d ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+                        )}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Pairs</label>
-                <div className="flex flex-wrap gap-2">
-                  {uniquePairs.map(p => (
-                    <button
-                      key={p}
-                      onClick={() => {
-                        setSelectedPairs(prev => 
-                          prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
-                        );
-                      }}
-                      className={cn(
-                        "rounded-lg px-2 py-1 text-[10px] font-bold uppercase transition-all",
-                        selectedPairs.includes(p) ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
-                      )}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                  {selectedPairs.length > 0 && (
-                    <button 
-                      onClick={() => setSelectedPairs([])}
-                      className="text-[10px] font-bold text-rose-500 underline underline-offset-2"
-                    >
-                      Clear
-                    </button>
-                  )}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Status</label>
+                  <div className="flex gap-2">
+                    {['ALL', 'OPEN', 'CLOSED'].map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setFilterStatus(s)}
+                        className={cn(
+                          "flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
+                          filterStatus === s ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+                        )}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Pairs</label>
+                  <div className="flex flex-wrap gap-2">
+                    {uniquePairs.map(p => (
+                      <button
+                        key={p}
+                        onClick={() => {
+                          setSelectedPairs(prev => 
+                            prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
+                          );
+                        }}
+                        className={cn(
+                          "rounded-lg px-2 py-1 text-[10px] font-bold uppercase transition-all",
+                          selectedPairs.includes(p) ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+                        )}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -325,19 +414,21 @@ export default function TradeList({ userId }: { userId: string }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-8">
-                  <div className="text-right">
-                    <p className="text-xs text-zinc-500 uppercase tracking-wider">Entry</p>
-                    <p className="font-medium">{formatCurrency(trade.entryPrice)}</p>
+                <div className="flex items-center gap-6">
+                  <div className="hidden md:block w-32 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                    <div 
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        (trade.pnl || 0) >= 0 ? "bg-emerald-500" : "bg-rose-500"
+                      )}
+                      style={{ 
+                        width: `${Math.min(100, (Math.abs(trade.pnl || 0) / filteredStats.maxPnL) * 100)}%`,
+                        marginLeft: (trade.pnl || 0) >= 0 ? '0' : 'auto'
+                      }}
+                    />
                   </div>
-                  {trade.exitPrice && (
-                    <div className="text-right">
-                      <p className="text-xs text-zinc-500 uppercase tracking-wider">Exit</p>
-                      <p className="font-medium">{formatCurrency(trade.exitPrice)}</p>
-                    </div>
-                  )}
-                  <div className="text-right">
-                    <p className="text-xs text-zinc-500 uppercase tracking-wider">PnL</p>
+                  <div className="text-right min-w-[80px]">
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">PnL</p>
                     <p className={cn(
                       "text-lg font-bold",
                       (trade.pnl || 0) > 0 ? "text-emerald-500" : (trade.pnl || 0) < 0 ? "text-rose-500" : "text-zinc-400"
@@ -345,7 +436,7 @@ export default function TradeList({ userId }: { userId: string }) {
                       {trade.pnl ? formatCurrency(trade.pnl) : '-'}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     {trade.status === 'OPEN' && (
                       <button 
                         onClick={() => handleCloseTrade(trade)}
@@ -353,6 +444,15 @@ export default function TradeList({ userId }: { userId: string }) {
                         title="Close Trade"
                       >
                         <CheckCircle2 size={18} />
+                      </button>
+                    )}
+                    {onJournalTrade && (
+                      <button 
+                        onClick={() => trade.id && onJournalTrade(trade.id)}
+                        className="rounded-lg bg-zinc-800 p-2 text-zinc-400 transition-all hover:bg-emerald-500/10 hover:text-emerald-500"
+                        title="Journal this trade"
+                      >
+                        <BookOpen size={18} />
                       </button>
                     )}
                     <button 

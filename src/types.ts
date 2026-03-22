@@ -31,6 +31,12 @@ export interface UserSettings {
     goal_reached: boolean;
     daily_summary: boolean;
   };
+  brokerConfig?: {
+    provider: 'metaapi';
+    metaApiToken: string;
+    accountId: string;
+    isActive: boolean;
+  };
 }
 
 export interface JournalEntry {

@@ -11,8 +11,10 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
-import { Layout, LineChart, BarChart, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X } from 'lucide-react';
+import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator } from 'lucide-react';
 import { cn } from './lib/utils';
+import { db, handleFirestoreError, OperationType } from './firebase';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import Dashboard from './components/Dashboard';
 import TradeForm from './components/TradeForm';
 import TradeList from './components/TradeList';
@@ -22,18 +24,58 @@ import StrategyAnalysis from './components/StrategyAnalysis';
 import Calendar from './components/Calendar';
 import Settings from './components/Settings';
 import NotificationManager from './components/NotificationManager';
+import AdminDashboard from './components/AdminDashboard';
+import EconomicCalendar from './components/EconomicCalendar';
+import EquityForecaster from './components/EquityForecaster';
+import PreFlightChecklist from './components/PreFlightChecklist';
+import RiskCalculator from './components/RiskCalculator';
 
-type Tab = 'dashboard' | 'trades' | 'journal' | 'insights' | 'strategy' | 'calendar' | 'settings';
+type Tab = 'dashboard' | 'trades' | 'journal' | 'insights' | 'strategy' | 'calendar' | 'settings' | 'admin' | 'economic' | 'forecasting' | 'preflight' | 'risk';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [isTradeFormOpen, setIsTradeFormOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [preSelectedTradeId, setPreSelectedTradeId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        // Sync user profile
+        const userRef = doc(db, 'users', user.uid);
+        try {
+          const userDoc = await getDoc(userRef);
+          const now = new Date().toISOString();
+          
+          if (!userDoc.exists()) {
+            const isDefaultAdmin = user.email === 'franklinmburu05@gmail.com';
+            await setDoc(userRef, {
+              email: user.email,
+              displayName: user.displayName,
+              photoURL: user.photoURL,
+              role: isDefaultAdmin ? 'admin' : 'user',
+              createdAt: now,
+              lastLogin: now
+            });
+            setIsAdmin(isDefaultAdmin);
+          } else {
+            const userData = userDoc.data();
+            setIsAdmin(userData.role === 'admin');
+            await updateDoc(userRef, {
+              lastLogin: now,
+              displayName: user.displayName,
+              photoURL: user.photoURL
+            });
+          }
+        } catch (error) {
+          console.error('Error syncing user profile:', error);
+        }
+      } else {
+        setIsAdmin(false);
+      }
       setUser(user);
       setLoading(false);
     });
@@ -76,10 +118,15 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: Layout },
     { id: 'trades', label: 'Trades', icon: HistoryIcon },
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
+    { id: 'preflight', label: 'Pre-Flight', icon: CheckCircle },
+    { id: 'risk', label: 'Risk Calculator', icon: Calculator },
     { id: 'strategy', label: 'Strategy Analysis', icon: Target },
     { id: 'journal', label: 'Journal', icon: BookOpen },
     { id: 'insights', label: 'AI Insights', icon: Brain },
+    { id: 'economic', label: 'Economic Calendar', icon: Globe },
+    { id: 'forecasting', label: 'Equity Forecaster', icon: LineChartIcon },
     { id: 'settings', label: 'Settings', icon: UserIcon },
+    ...(isAdmin ? [{ id: 'admin', label: 'Admin', icon: Shield }] : []),
   ];
 
   return (
@@ -170,12 +217,31 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-6">
           <div className="mx-auto max-w-6xl space-y-8">
             {activeTab === 'dashboard' && <Dashboard userId={user.uid} />}
-            {activeTab === 'trades' && <TradeList userId={user.uid} />}
+            {activeTab === 'trades' && (
+              <TradeList 
+                userId={user.uid} 
+                onJournalTrade={(id) => {
+                  setPreSelectedTradeId(id);
+                  setActiveTab('journal');
+                }}
+              />
+            )}
             {activeTab === 'calendar' && <Calendar userId={user.uid} />}
             {activeTab === 'strategy' && <StrategyAnalysis userId={user.uid} />}
-            {activeTab === 'journal' && <Journal userId={user.uid} />}
+            {activeTab === 'journal' && (
+              <Journal 
+                userId={user.uid} 
+                initialTradeId={preSelectedTradeId || undefined}
+                onClearInitialTrade={() => setPreSelectedTradeId(null)}
+              />
+            )}
             {activeTab === 'insights' && <AIInsights userId={user.uid} />}
+            {activeTab === 'preflight' && <PreFlightChecklist userId={user.uid} />}
+            {activeTab === 'risk' && <RiskCalculator userId={user.uid} />}
+            {activeTab === 'economic' && <EconomicCalendar userId={user.uid} />}
+            {activeTab === 'forecasting' && <EquityForecaster userId={user.uid} />}
             {activeTab === 'settings' && <Settings userId={user.uid} />}
+            {activeTab === 'admin' && isAdmin && <AdminDashboard />}
           </div>
         </div>
       </main>

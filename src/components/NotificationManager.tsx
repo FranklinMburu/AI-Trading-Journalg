@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserSettings } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bell, CheckCircle2, XCircle, Trophy, X } from 'lucide-react';
@@ -23,6 +23,8 @@ export default function NotificationManager({ userId }: { userId: string }) {
     const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
     const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) setSettings(snapshot.docs[0].data() as UserSettings);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'settings');
     });
 
     const tradesQuery = query(
@@ -60,6 +62,8 @@ export default function NotificationManager({ userId }: { userId: string }) {
           });
         }
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'trades');
     });
 
     return () => {
