@@ -27,6 +27,7 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
     notes: '',
     entryTime: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16),
     strategyId: '',
+    tags: '',
   });
 
   const calculatePnL = () => {
@@ -138,6 +139,7 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
       const pnl = currentPnL !== null ? currentPnL : undefined;
       
       const entryTime = formData.entryTime ? new Date(formData.entryTime).toISOString() : new Date().toISOString();
+      const tags = formData.tags.split(',').map(t => t.trim()).filter(t => t !== '');
 
       await addDoc(collection(db, 'trades'), {
         userId,
@@ -154,6 +156,7 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
         takeProfit,
         notes: formData.notes,
         strategyId: formData.strategyId || undefined,
+        tags,
       });
 
       onClose();
@@ -165,275 +168,301 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 p-4 backdrop-blur-sm overflow-y-auto">
+      <div className="my-auto flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl max-h-[90vh]">
+        {/* Sticky Header */}
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-6 py-4">
           <h2 className="text-xl font-bold">Log New Trade</h2>
-          <button onClick={onClose} className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+          <button 
+            onClick={onClose} 
+            className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+            title="Close"
+          >
             <X size={20} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Symbol</label>
-              <input
-                required
-                type="text"
-                placeholder="BTC/USD"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.symbol}
-                onChange={(e) => setFormData({ ...formData, symbol: e.target.value })}
-              />
+        <div className="flex-1 overflow-y-auto p-6">
+          <form id="trade-form" onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Symbol</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="BTC/USD"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.symbol}
+                  onChange={(e) => setFormData({ ...formData, symbol: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Direction</label>
+                <select
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.direction}
+                  onChange={(e) => setFormData({ ...formData, direction: e.target.value as TradeDirection })}
+                >
+                  <option value="LONG">Long</option>
+                  <option value="SHORT">Short</option>
+                </select>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Direction</label>
-              <select
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.direction}
-                onChange={(e) => setFormData({ ...formData, direction: e.target.value as TradeDirection })}
-              >
-                <option value="LONG">Long</option>
-                <option value="SHORT">Short</option>
-              </select>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Entry Price</label>
-              <input
-                required
-                type="number"
-                step="any"
-                placeholder="0.00"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.entryPrice}
-                onChange={(e) => setFormData({ ...formData, entryPrice: e.target.value })}
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Entry Price</label>
+                <input
+                  required
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.entryPrice}
+                  onChange={(e) => setFormData({ ...formData, entryPrice: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Quantity</label>
+                  <button 
+                    type="button"
+                    onClick={() => setShowRiskCalc(!showRiskCalc)}
+                    className={cn(
+                      "flex items-center gap-1 text-[10px] font-bold transition-colors",
+                      showRiskCalc ? "text-rose-400 hover:text-rose-300" : "text-emerald-500 hover:text-emerald-400"
+                    )}
+                  >
+                    <Calculator size={10} />
+                    {showRiskCalc ? 'Hide Calc' : 'Risk Calc'}
+                  </button>
+                </div>
+                <input
+                  required
+                  type="number"
+                  step="any"
+                  placeholder="1.0"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.quantity}
+                  onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+                />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Quantity</label>
+
+            {showRiskCalc && (
+              <div className="relative rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 animate-in slide-in-from-top duration-300">
                 <button 
                   type="button"
-                  onClick={() => setShowRiskCalc(!showRiskCalc)}
-                  className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 hover:text-emerald-400"
+                  onClick={() => setShowRiskCalc(false)}
+                  className="absolute right-2 top-2 rounded-lg p-1 text-zinc-500 hover:bg-emerald-500/10 hover:text-emerald-400"
                 >
-                  <Calculator size={10} />
-                  Risk Calc
+                  <X size={14} />
                 </button>
+                <RiskCalculator 
+                  userId={userId} 
+                  compact
+                  entryPrice={parseFloat(formData.entryPrice) || undefined}
+                  stopLossPrice={parseFloat(formData.stopLoss) || undefined}
+                  onCalculate={(size) => setFormData(prev => ({ ...prev, quantity: size.toString() }))}
+                />
               </div>
-              <input
-                required
-                type="number"
-                step="any"
-                placeholder="1.0"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.quantity}
-                onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-              />
-            </div>
-          </div>
+            )}
 
-          {showRiskCalc && (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 animate-in slide-in-from-top duration-300">
-              <RiskCalculator 
-                userId={userId} 
-                compact
-                entryPrice={parseFloat(formData.entryPrice) || undefined}
-                stopLossPrice={parseFloat(formData.stopLoss) || undefined}
-                onCalculate={(size) => setFormData(prev => ({ ...prev, quantity: size.toString() }))}
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Status</label>
-              <select
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.status}
-                onChange={(e) => setFormData({ ...formData, status: e.target.value as TradeStatus })}
-              >
-                <option value="OPEN">Open</option>
-                <option value="CLOSED">Closed</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Exit Price (Optional)</label>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.00"
-                disabled={formData.status === 'OPEN'}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
-                value={formData.exitPrice}
-                onChange={(e) => setFormData({ ...formData, exitPrice: e.target.value })}
-              />
-              {formData.exitPrice && currentPnL !== null && (
-                <div className={cn(
-                  "text-xs font-bold mt-1 flex items-center justify-between",
-                  currentPnL >= 0 ? "text-emerald-400" : "text-rose-400"
-                )}>
-                  <span>Estimated PnL:</span>
-                  <span>{formatCurrency(currentPnL)}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Stop Loss</label>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.00"
-                className={cn(
-                  "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
-                  isInvalidSL() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
-                )}
-                value={formData.stopLoss}
-                onChange={(e) => setFormData({ ...formData, stopLoss: e.target.value })}
-              />
-              {isInvalidSL() && (
-                <p className="text-[10px] text-rose-500 font-bold">SL must be {formData.direction === 'LONG' ? 'below' : 'above'} entry</p>
-              )}
-              {currentRisk !== null && (
-                <div className="text-[10px] font-medium text-rose-400 mt-1 flex items-center justify-between">
-                  <span>Risk:</span>
-                  <span>{formatCurrency(currentRisk)} ({((currentRisk / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
-                </div>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Take Profit</label>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.00"
-                className={cn(
-                  "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
-                  isInvalidTP() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
-                )}
-                value={formData.takeProfit}
-                onChange={(e) => setFormData({ ...formData, takeProfit: e.target.value })}
-              />
-              {isInvalidTP() && (
-                <p className="text-[10px] text-rose-500 font-bold">TP must be {formData.direction === 'LONG' ? 'above' : 'below'} entry</p>
-              )}
-              {currentReward !== null && (
-                <div className="text-[10px] font-medium text-emerald-400 mt-1 flex items-center justify-between">
-                  <span>Reward:</span>
-                  <span>{formatCurrency(currentReward)} ({((currentReward / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {visualizer && (
-            <div className="space-y-2 py-2">
-              <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Setup Visualizer</span>
-                <span className={cn(
-                  "px-1.5 py-0.5 rounded bg-zinc-800",
-                  parseFloat(rrRatio || '0') >= 2 ? "text-emerald-500" : "text-zinc-400"
-                )}>
-                  R:R 1:{rrRatio}
-                </span>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Status</label>
+                <select
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value as TradeStatus })}
+                >
+                  <option value="OPEN">Open</option>
+                  <option value="CLOSED">Closed</option>
+                </select>
               </div>
-              <div className="relative h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
-                {/* Visualizer Bar */}
-                <div 
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Exit Price (Optional)</label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  disabled={formData.status === 'OPEN'}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+                  value={formData.exitPrice}
+                  onChange={(e) => setFormData({ ...formData, exitPrice: e.target.value })}
+                />
+                {formData.exitPrice && currentPnL !== null && (
+                  <div className={cn(
+                    "text-xs font-bold mt-1 flex items-center justify-between",
+                    currentPnL >= 0 ? "text-emerald-400" : "text-rose-400"
+                  )}>
+                    <span>Estimated PnL:</span>
+                    <span>{formatCurrency(currentPnL)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Stop Loss</label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
                   className={cn(
-                    "absolute h-full transition-all duration-500",
-                    visualizer.isLong ? "bg-emerald-500/20" : "bg-rose-500/20"
+                    "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
+                    isInvalidSL() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
                   )}
-                  style={{ 
-                    left: `${Math.min(visualizer.slPos, visualizer.tpPos)}%`, 
-                    width: `${Math.abs(visualizer.tpPos - visualizer.slPos)}%` 
-                  }}
+                  value={formData.stopLoss}
+                  onChange={(e) => setFormData({ ...formData, stopLoss: e.target.value })}
                 />
-                {/* Entry Point */}
-                <div 
-                  className="absolute top-0 h-full w-1 bg-white z-10 shadow-[0_0_8px_rgba(255,255,255,0.5)]"
-                  style={{ left: `${visualizer.entryPos}%` }}
-                />
-                {/* SL Point */}
-                <div 
-                  className="absolute top-0 h-full w-1 bg-rose-500 z-10"
-                  style={{ left: `${visualizer.slPos}%` }}
-                />
-                {/* TP Point */}
-                <div 
-                  className="absolute top-0 h-full w-1 bg-emerald-500 z-10"
-                  style={{ left: `${visualizer.tpPos}%` }}
-                />
+                {isInvalidSL() && (
+                  <p className="text-[10px] text-rose-500 font-bold">SL must be {formData.direction === 'LONG' ? 'below' : 'above'} entry</p>
+                )}
+                {currentRisk !== null && (
+                  <div className="text-[10px] font-medium text-rose-400 mt-1 flex items-center justify-between">
+                    <span>Risk:</span>
+                    <span>{formatCurrency(currentRisk)} ({((currentRisk / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between text-[9px] font-mono text-zinc-500">
-                <span>SL</span>
-                <span>ENTRY</span>
-                <span>TP</span>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Take Profit</label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  className={cn(
+                    "w-full rounded-xl border bg-zinc-950 px-4 py-2.5 text-sm focus:outline-none focus:ring-1",
+                    isInvalidTP() ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : "border-zinc-800 focus:border-emerald-500 focus:ring-emerald-500"
+                  )}
+                  value={formData.takeProfit}
+                  onChange={(e) => setFormData({ ...formData, takeProfit: e.target.value })}
+                />
+                {isInvalidTP() && (
+                  <p className="text-[10px] text-rose-500 font-bold">TP must be {formData.direction === 'LONG' ? 'above' : 'below'} entry</p>
+                )}
+                {currentReward !== null && (
+                  <div className="text-[10px] font-medium text-emerald-400 mt-1 flex items-center justify-between">
+                    <span>Reward:</span>
+                    <span>{formatCurrency(currentReward)} ({((currentReward / (parseFloat(formData.entryPrice) * parseFloat(formData.quantity))) * 100).toFixed(2)}%)</span>
+                  </div>
+                )}
               </div>
             </div>
-          )}
 
-          <div className="grid grid-cols-2 gap-4">
+            {visualizer && (
+              <div className="space-y-2 py-2">
+                <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                  <span>Setup Visualizer</span>
+                  <span className={cn(
+                    "px-1.5 py-0.5 rounded bg-zinc-800",
+                    parseFloat(rrRatio || '0') >= 2 ? "text-emerald-500" : "text-zinc-400"
+                  )}>
+                    R:R 1:{rrRatio}
+                  </span>
+                </div>
+                <div className="relative h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                  <div 
+                    className={cn(
+                      "absolute h-full transition-all duration-500",
+                      visualizer.isLong ? "bg-emerald-500/20" : "bg-rose-500/20"
+                    )}
+                    style={{ 
+                      left: `${Math.min(visualizer.slPos, visualizer.tpPos)}%`, 
+                      width: `${Math.abs(visualizer.tpPos - visualizer.slPos)}%` 
+                    }}
+                  />
+                  <div 
+                    className="absolute top-0 h-full w-1 bg-white z-10 shadow-[0_0_8px_rgba(255,255,255,0.5)]"
+                    style={{ left: `${visualizer.entryPos}%` }}
+                  />
+                  <div 
+                    className="absolute top-0 h-full w-1 bg-rose-500 z-10"
+                    style={{ left: `${visualizer.slPos}%` }}
+                  />
+                  <div 
+                    className="absolute top-0 h-full w-1 bg-emerald-500 z-10"
+                    style={{ left: `${visualizer.tpPos}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-[9px] font-mono text-zinc-500">
+                  <span>SL</span>
+                  <span>ENTRY</span>
+                  <span>TP</span>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Entry Time</label>
+                <input
+                  type="datetime-local"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.entryTime}
+                  onChange={(e) => setFormData({ ...formData, entryTime: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Strategy</label>
+                <select
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={formData.strategyId}
+                  onChange={(e) => setFormData({ ...formData, strategyId: e.target.value })}
+                >
+                  <option value="">No Strategy</option>
+                  {strategies.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Entry Time</label>
+              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Tags (comma separated)</label>
               <input
-                type="datetime-local"
+                type="text"
+                placeholder="Breakout, High Volatility, FOMO..."
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.entryTime}
-                onChange={(e) => setFormData({ ...formData, entryTime: e.target.value })}
+                value={formData.tags}
+                onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
               />
             </div>
+
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Strategy</label>
-              <select
+              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Notes</label>
+              <textarea
+                rows={3}
+                placeholder="Trade rationale, emotions, strategy..."
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                value={formData.strategyId}
-                onChange={(e) => setFormData({ ...formData, strategyId: e.target.value })}
-              >
-                <option value="">No Strategy</option>
-                {strategies.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+              />
             </div>
-          </div>
+          </form>
+        </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Notes</label>
-            <textarea
-              rows={3}
-              placeholder="Trade rationale, emotions, strategy..."
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              value={formData.notes}
-              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-            />
-          </div>
-
-          <div className="flex gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 rounded-xl border border-zinc-800 py-3 text-sm font-medium hover:bg-zinc-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 text-sm font-medium text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
-            >
-              {loading ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-950 border-t-transparent" /> : <Save size={18} />}
-              Save Trade
-            </button>
-          </div>
-        </form>
+        {/* Sticky Footer */}
+        <div className="sticky bottom-0 z-10 flex gap-3 border-t border-zinc-800 bg-zinc-900 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-xl border border-zinc-800 py-3 text-sm font-medium hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            form="trade-form"
+            type="submit"
+            disabled={loading}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 text-sm font-medium text-zinc-950 hover:bg-emerald-400 disabled:opacity-50 transition-all active:scale-95"
+          >
+            {loading ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-950 border-t-transparent" /> : <Save size={18} />}
+            Save Trade
+          </button>
+        </div>
       </div>
     </div>
   );

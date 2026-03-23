@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { UserSettings } from '../types';
-import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth } from '../firebase';
 
@@ -10,11 +10,14 @@ export default function Settings({ userId }: { userId: string }) {
   const user = auth.currentUser;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [settings, setSettings] = useState<UserSettings>({
     userId,
     currency: 'USD',
     dailyGoal: 500,
     weeklyGoal: 2500,
+    startingBalance: 10000,
     notifications: {
       tp_hit: true,
       sl_hit: true,
@@ -52,6 +55,43 @@ export default function Settings({ userId }: { userId: string }) {
       handleFirestoreError(error, OperationType.WRITE, 'settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleResetData = async () => {
+    setResetting(true);
+    try {
+      const batch = writeBatch(db);
+      
+      // Delete trades
+      const tradesQuery = query(collection(db, 'trades'), where('userId', '==', userId));
+      const tradesSnapshot = await getDocs(tradesQuery);
+      tradesSnapshot.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+
+      // Delete strategies
+      const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
+      const strategiesSnapshot = await getDocs(strategiesQuery);
+      strategiesSnapshot.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+
+      await batch.commit();
+      
+      // Clear local storage cache related to this user
+      Object.keys(localStorage).forEach(key => {
+        if (key.includes(userId)) {
+          localStorage.removeItem(key);
+        }
+      });
+
+      setResetConfirm(false);
+      window.location.reload(); // Refresh to clear state across the app
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'multiple_collections');
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -146,6 +186,18 @@ export default function Settings({ userId }: { userId: string }) {
             <h4 className="font-bold">Preferences</h4>
           </div>
           <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-zinc-500">Starting Balance</label>
+              <div className="relative">
+                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                <input
+                  type="number"
+                  value={settings.startingBalance}
+                  onChange={(e) => setSettings({ ...settings, startingBalance: Number(e.target.value) })}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 py-2 pl-10 pr-4 text-sm focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
             <div>
               <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-zinc-500">Base Currency</label>
               <select
@@ -289,6 +341,51 @@ export default function Settings({ userId }: { userId: string }) {
                 </p>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Danger Zone */}
+        <div className="space-y-4 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-6 md:col-span-2">
+          <div className="flex items-center gap-2 text-rose-500">
+            <AlertTriangle size={20} />
+            <h4 className="font-bold">Danger Zone</h4>
+          </div>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-zinc-200">Reset All Data</p>
+              <p className="text-xs text-zinc-500">Permanently delete all trades and strategies from your account. This cannot be undone.</p>
+            </div>
+            
+            {!resetConfirm ? (
+              <button
+                onClick={() => setResetConfirm(true)}
+                className="flex items-center gap-2 rounded-xl bg-rose-500/10 px-6 py-2.5 text-sm font-bold text-rose-500 transition-all hover:bg-rose-500 hover:text-white"
+              >
+                <Trash2 size={18} />
+                Reset Journal
+              </button>
+            ) : (
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setResetConfirm(false)}
+                  className="rounded-xl bg-zinc-800 px-4 py-2 text-xs font-bold text-zinc-400 transition-all hover:bg-zinc-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleResetData}
+                  disabled={resetting}
+                  className="flex items-center gap-2 rounded-xl bg-rose-600 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-600/20 transition-all hover:bg-rose-500 active:scale-95 disabled:opacity-50"
+                >
+                  {resetting ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  ) : (
+                    <Trash2 size={18} />
+                  )}
+                  Confirm Permanent Delete
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

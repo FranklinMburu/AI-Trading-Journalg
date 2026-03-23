@@ -371,35 +371,35 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-500">
             <Target size={24} />
           </div>
           <div>
-            <h3 className="text-xl font-bold">Strategy Performance</h3>
+            <h3 className="text-xl font-bold tracking-tight">Strategy Performance</h3>
             <p className="text-sm text-zinc-400">Comparative analysis of your trading strategies</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button 
             onClick={() => setIsBacktesting(true)}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-100 sm:flex-none"
           >
             <Activity size={16} />
-            Backtest Strategy
+            Backtest
           </button>
           <button 
             onClick={handleSeedXAUUSDData}
             disabled={isSeeding}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50 sm:flex-none"
           >
             {isSeeding ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent" /> : <Database size={16} />}
-            {isSeeding ? 'Fetching Market Data...' : 'Seed XAU/USD Data'}
+            {isSeeding ? 'Seeding...' : 'Seed Data'}
           </button>
           <button 
             onClick={() => setIsAdding(!isAdding)}
-            className="flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-emerald-400"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-95 sm:flex-none"
           >
             {isAdding ? <X size={16} /> : <Plus size={16} />}
             {isAdding ? 'Cancel' : 'New Strategy'}
@@ -753,8 +753,8 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       </div>
       {/* Backtest Modal */}
       {isBacktesting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="my-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between border-b border-zinc-800 p-4">
               <div className="flex items-center gap-2 text-blue-500">
                 <Activity size={20} />
@@ -959,8 +959,8 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
 
       {/* Strategy Rules Modal */}
       {viewingStrategy && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between border-b border-zinc-800 p-4">
               <div className="flex items-center gap-2 text-emerald-500">
                 <BookOpen size={20} />

@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../firebase';
+import { UserSettings } from '../types';
 import { Calculator, DollarSign, Percent, Target, Shield, Info } from 'lucide-react';
 import { formatCurrency, cn } from '../lib/utils';
 
@@ -19,6 +22,19 @@ export default function RiskCalculator({ userId, initialBalance, onCalculate, co
   const [calculationMode, setCalculationMode] = useState<'pips' | 'price'>(entryPrice && stopLossPrice ? 'price' : 'pips');
   const [positionSize, setPositionSize] = useState(0);
   const [riskAmount, setRiskAmount] = useState(0);
+
+  useEffect(() => {
+    const q = query(collection(db, 'settings'), where('userId', '==', userId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        const settings = snapshot.docs[0].data() as UserSettings;
+        if (settings.startingBalance && !initialBalance) {
+          setBalance(settings.startingBalance);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [userId, initialBalance]);
 
   useEffect(() => {
     const riskAmt = (balance * riskPercent) / 100;

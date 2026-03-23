@@ -298,9 +298,14 @@ export default function Dashboard({ userId }: { userId: string }) {
     <div className="space-y-8">
       {/* Header with Time Filter */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Trading Overview</h2>
-          <p className="text-sm text-zinc-400">Track your performance and goals</p>
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
+            <Activity size={24} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight">Trading Overview</h2>
+            <p className="text-sm text-zinc-400">Track your performance and goals</p>
+          </div>
         </div>
         <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
           {(['30d', '90d', 'all'] as const).map((f) => (
@@ -450,9 +455,9 @@ export default function Dashboard({ userId }: { userId: string }) {
                     "flex items-center justify-between rounded-lg p-2 transition-colors",
                     isNoTrade ? "bg-rose-500/10 border border-rose-500/20" : "bg-zinc-950/50"
                   )}>
-                    <div className="flex flex-col">
+                    <div className="flex flex-col flex-1 min-w-0">
                       <span className="text-[10px] font-bold text-zinc-500">{event.currency} • {format(eventDate, 'HH:mm')}</span>
-                      <span className="text-xs font-medium text-zinc-200 truncate max-w-[120px]">{event.event}</span>
+                      <span className="text-xs font-medium text-zinc-200 truncate">{event.event}</span>
                     </div>
                     {isNoTrade ? (
                       <div className="flex items-center gap-1 text-rose-500 animate-pulse">

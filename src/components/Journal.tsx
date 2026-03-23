@@ -141,17 +141,17 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
           <h4 className="mb-6 text-lg font-semibold text-zinc-100">
             {editingEntry ? 'Edit Journal Entry' : 'New Journal Entry'}
           </h4>
-          <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <span className="text-sm font-medium text-zinc-400 uppercase tracking-wider">Mood</span>
+          <div className="mb-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex-1 space-y-3">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Mood</span>
               <div className="flex flex-wrap gap-2">
                 {['Happy', 'Neutral', 'Stressed', 'Focused', 'Greedy', 'FOMO'].map(m => (
                   <button
                     key={m}
                     onClick={() => setMood(m)}
                     className={cn(
-                      "rounded-lg px-3 py-1 text-xs font-medium transition-all",
-                      mood === m ? "bg-emerald-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+                      "rounded-xl px-4 py-2 text-xs font-bold transition-all active:scale-95",
+                      mood === m ? "bg-emerald-500 text-zinc-950 shadow-lg shadow-emerald-500/20" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100"
                     )}
                   >
                     {m}
@@ -160,12 +160,12 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
-              <span className="text-sm font-medium text-zinc-400 uppercase tracking-wider">Link Trade</span>
+            <div className="flex-1 space-y-3">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Link Trade</span>
               <select
                 value={selectedTradeId}
                 onChange={(e) => setSelectedTradeId(e.target.value)}
-                className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               >
                 <option value="">No trade linked</option>
                 {trades.map(trade => (
@@ -308,8 +308,8 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
 
       {/* Trade Detail Modal */}
       {viewingTrade && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+          <div className="my-auto w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
             <div className="mb-6 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className={cn(

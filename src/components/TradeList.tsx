@@ -371,42 +371,42 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
               className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 transition-all hover:border-zinc-700 hover:bg-zinc-900"
             >
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-4">
+                <div className="flex items-start gap-3 sm:items-center sm:gap-4">
                   <div className={cn(
-                    "flex h-12 w-12 items-center justify-center rounded-xl font-bold",
+                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl font-bold sm:h-12 sm:w-12",
                     trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
                   )}>
                     {trade.symbol.slice(0, 2)}
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-lg font-bold">{trade.symbol}</h4>
+                  <div className="flex-1 overflow-hidden">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                      <h4 className="text-base font-bold sm:text-lg">{trade.symbol}</h4>
                       <span className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                        "rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider sm:text-[10px]",
                         trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
                       )}>
                         {trade.direction}
                       </span>
                       {trade.status === 'OPEN' && (
-                        <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-500">
+                        <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-500 sm:text-[10px]">
                           OPEN
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-zinc-500">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 sm:text-xs">
                       <span className="flex items-center gap-1">
-                        <Calendar size={12} />
-                        {format(new Date(trade.entryTime), 'MMM d, yyyy HH:mm')}
+                        <Calendar size={10} className="sm:size-[12px]" />
+                        {format(new Date(trade.entryTime), 'MMM d, HH:mm')}
                       </span>
                       {trade.tags && trade.tags.length > 0 && (
-                        <span className="flex items-center gap-1">
+                        <span className="hidden items-center gap-1 sm:flex">
                           <Tag size={12} />
                           {trade.tags.join(', ')}
                         </span>
                       )}
                       {trade.strategyId && strategies.has(trade.strategyId) && (
                         <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-blue-500">
-                          <Target size={12} />
+                          <Target size={10} className="sm:size-[12px]" />
                           {strategies.get(trade.strategyId)}
                         </span>
                       )}
@@ -414,8 +414,8 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
                   </div>
                 </div>
 
-                <div className="flex items-center gap-6">
-                  <div className="hidden md:block w-32 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                <div className="flex items-center justify-between gap-4 border-t border-zinc-800/50 pt-4 sm:border-t-0 sm:pt-0 sm:justify-end sm:gap-6">
+                  <div className="hidden lg:block w-32 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
                     <div 
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
@@ -427,10 +427,10 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
                       }}
                     />
                   </div>
-                  <div className="text-right min-w-[80px]">
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">PnL</p>
+                  <div className="text-left sm:text-right min-w-[80px]">
+                    <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider sm:text-[10px]">PnL</p>
                     <p className={cn(
-                      "text-lg font-bold",
+                      "text-base font-bold sm:text-lg",
                       (trade.pnl || 0) > 0 ? "text-emerald-500" : (trade.pnl || 0) < 0 ? "text-rose-500" : "text-zinc-400"
                     )}>
                       {trade.pnl ? formatCurrency(trade.pnl) : '-'}
@@ -457,7 +457,7 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
                     )}
                     <button 
                       onClick={() => trade.id && setTradeToDelete(trade.id)}
-                      className="rounded-lg p-2 text-zinc-500 opacity-0 transition-all hover:bg-rose-500/10 hover:text-rose-500 group-hover:opacity-100"
+                      className="rounded-lg p-2 text-zinc-500 transition-all hover:bg-rose-500/10 hover:text-rose-500 sm:opacity-0 sm:group-hover:opacity-100"
                     >
                       <Trash2 size={18} />
                     </button>

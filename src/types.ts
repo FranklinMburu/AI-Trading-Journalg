@@ -25,6 +25,7 @@ export interface UserSettings {
   currency: string;
   dailyGoal: number;
   weeklyGoal: number;
+  startingBalance?: number;
   notifications: {
     tp_hit: boolean;
     sl_hit: boolean;

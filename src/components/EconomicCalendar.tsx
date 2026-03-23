@@ -72,7 +72,7 @@ export default function EconomicCalendar({ userId }: { userId: string }) {
 
   useEffect(() => {
     fetchEvents();
-  }, []);
+  }, [userId]);
 
   const isNoTradeZone = (eventTime: string) => {
     const now = new Date();

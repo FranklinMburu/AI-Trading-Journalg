@@ -1,9 +1,36 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  body {
+    @apply antialiased text-zinc-100 bg-zinc-950;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Optimize scrolling performance */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.zinc.800') transparent;
+  }
+}
+
 @layer components {
   .markdown-body {
     @apply prose prose-invert max-w-none;
     @apply prose-p:text-zinc-300 prose-headings:text-zinc-100 prose-strong:text-emerald-500;
+  }
+
+  /* Hardware acceleration for common animations */
+  .will-change-transform {
+    will-change: transform;
+  }
+  
+  .will-change-opacity {
+    will-change: opacity;
   }
 }

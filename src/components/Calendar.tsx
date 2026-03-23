@@ -50,14 +50,26 @@ export default function Calendar({ userId }: { userId: string }) {
     end: endDate,
   });
 
+  // Pre-calculate trades by date for performance
+  const tradesByDate = React.useMemo(() => {
+    const map = new Map<string, Trade[]>();
+    trades.forEach(trade => {
+      const date = new Date(trade.exitTime || trade.entryTime);
+      const dateKey = format(date, 'yyyy-MM-dd');
+      if (!map.has(dateKey)) {
+        map.set(dateKey, []);
+      }
+      map.get(dateKey)?.push(trade);
+    });
+    return map;
+  }, [trades]);
+
   const nextMonth = () => setCurrentDate(addMonths(currentDate, 1));
   const prevMonth = () => setCurrentDate(subMonths(currentDate, 1));
 
   const getDayTrades = (day: Date) => {
-    return trades.filter(trade => {
-      const tradeDate = new Date(trade.exitTime || trade.entryTime);
-      return isSameDay(tradeDate, day);
-    });
+    const dateKey = format(day, 'yyyy-MM-dd');
+    return tradesByDate.get(dateKey) || [];
   };
 
   const getDayPnL = (day: Date) => {
