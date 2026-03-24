@@ -8,8 +8,22 @@
   }
   
   body {
-    @apply antialiased text-zinc-100 bg-zinc-950;
+    @apply antialiased text-zinc-100 bg-zinc-950 selection:bg-emerald-500/30 selection:text-emerald-200;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Custom Scrollbar for Webkit */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-zinc-800 rounded-full hover:bg-zinc-700 transition-colors;
   }
 
   /* Optimize scrolling performance */

@@ -11,7 +11,7 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
-import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator, Database, Search, Command, Loader2 } from 'lucide-react';
+import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator, Database, Search, Command, Loader2, ArrowUp } from 'lucide-react';
 import { cn } from './lib/utils';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
@@ -58,7 +58,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const [preSelectedTradeId, setPreSelectedTradeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 400);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -147,7 +156,7 @@ export default function App() {
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
       {/* Mobile Sidebar Overlay */}
-      {isSidebarOpen && (
+      {isSidebarOpen && !isSidebarCollapsed && (
         <div 
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
           onClick={() => setIsSidebarOpen(false)}
@@ -155,11 +164,15 @@ export default function App() {
       )}
 
       {/* Sidebar */}
-      <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-zinc-800 bg-zinc-900 transition-all duration-300 ease-in-out md:static md:flex md:translate-x-0",
-        isSidebarOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full",
-        isSidebarHidden ? "w-0 border-none overflow-hidden" : (isSidebarCollapsed ? "w-20" : "w-64")
-      )}>
+      <aside 
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-zinc-800 bg-zinc-900 transition-all duration-300 ease-in-out will-change-[width,transform]",
+          "md:static md:translate-x-0",
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full",
+          isSidebarOpen && !isSidebarCollapsed && "shadow-2xl",
+          isSidebarHidden ? "w-0 border-none opacity-0 pointer-events-none" : (isSidebarCollapsed ? "w-20" : "w-64")
+        )}
+      >
         <div className={cn("flex h-16 items-center px-6", isSidebarCollapsed ? "justify-center px-0" : "justify-between")}>
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
@@ -167,7 +180,7 @@ export default function App() {
             </div>
             {!isSidebarCollapsed && <span className="text-lg font-bold tracking-tight">TradeFlow</span>}
           </div>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden">
+          <button onClick={() => setIsSidebarOpen(false)} className={cn("md:hidden", isSidebarCollapsed && "hidden")}>
             <X size={20} className="text-zinc-400" />
           </button>
         </div>
@@ -178,7 +191,10 @@ export default function App() {
               key={tab.id}
               onClick={() => {
                 setActiveTab(tab.id as Tab);
-                setIsSidebarOpen(false);
+                // Only close on mobile if we are in FULL mode (not mini)
+                if (!isSidebarCollapsed) {
+                  setIsSidebarOpen(false);
+                }
               }}
               title={isSidebarCollapsed ? tab.label : undefined}
               className={cn(
@@ -212,27 +228,60 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex flex-1 flex-col overflow-hidden relative">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 md:px-6 backdrop-blur-md z-30">
+      <main className={cn(
+        "flex flex-1 flex-col overflow-hidden relative transition-all duration-300",
+        isSidebarOpen && isSidebarCollapsed && !isSidebarHidden && "pl-20 md:pl-0"
+      )}>
+        {isSidebarHidden && (
+          <button 
+            onClick={() => {
+              setIsSidebarHidden(false);
+              setIsSidebarCollapsed(false);
+              setIsSidebarOpen(true);
+            }}
+            className="fixed bottom-6 left-6 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 shadow-lg shadow-emerald-500/20 transition-all hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-left-4"
+            title="Show Sidebar"
+          >
+            <Menu size={24} />
+          </button>
+        )}
+
+        {showBackToTop && (
+          <button 
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="fixed bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-800 text-zinc-100 shadow-lg transition-all hover:bg-zinc-700 hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-bottom-4"
+            title="Back to Top"
+          >
+            <ArrowUp size={24} />
+          </button>
+        )}
+
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/50 px-4 md:px-6 backdrop-blur-xl z-30 sticky top-0">
           <div className="flex items-center gap-3">
             <button 
-              onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              <Menu size={20} />
-            </button>
-            <button 
               onClick={() => {
+                // If hidden, show full
                 if (isSidebarHidden) {
                   setIsSidebarHidden(false);
                   setIsSidebarCollapsed(false);
-                } else if (!isSidebarCollapsed) {
+                  setIsSidebarOpen(true);
+                } 
+                // If closed (mobile), open full
+                else if (!isSidebarOpen) {
+                  setIsSidebarOpen(true);
+                  setIsSidebarCollapsed(false);
+                }
+                // If full, collapse to mini
+                else if (!isSidebarCollapsed) {
                   setIsSidebarCollapsed(true);
-                } else {
+                } 
+                // If mini, hide
+                else {
                   setIsSidebarHidden(true);
+                  setIsSidebarOpen(false);
                 }
               }}
-              className="hidden md:flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
               title={isSidebarHidden ? "Show Sidebar" : (isSidebarCollapsed ? "Hide Sidebar" : "Collapse Sidebar")}
             >
               <Menu size={20} />
