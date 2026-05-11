@@ -5,16 +5,13 @@ import { UserSettings } from '../types';
 import { Calculator, DollarSign, Percent, Target, Shield, Info } from 'lucide-react';
 import { formatCurrency, cn } from '../lib/utils';
 
-interface RiskCalculatorProps {
-  userId: string;
-  initialBalance?: number;
-  onCalculate?: (positionSize: number) => void;
-  compact?: boolean;
-  entryPrice?: number;
-  stopLossPrice?: number;
-}
+import { useAccount } from '../contexts/AccountContext';
 
-export default function RiskCalculator({ userId, initialBalance, onCalculate, compact, entryPrice, stopLossPrice }: RiskCalculatorProps) {
+export default function RiskCalculator({ initialBalance, onCalculate, compact, entryPrice, stopLossPrice }: { initialBalance?: number; onCalculate?: (positionSize: number) => void; compact?: boolean; entryPrice?: number; stopLossPrice?: number; }) {
+  const { activeAccount, selectedAccountId } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+  
   const [balance, setBalance] = useState(initialBalance || 10000);
   const [riskPercent, setRiskPercent] = useState(1);
   const [stopLossPips, setStopLossPips] = useState(20);
@@ -24,7 +21,8 @@ export default function RiskCalculator({ userId, initialBalance, onCalculate, co
   const [riskAmount, setRiskAmount] = useState(0);
 
   useEffect(() => {
-    const q = query(collection(db, 'settings'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+    const q = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const settings = snapshot.docs[0].data() as UserSettings;
@@ -34,7 +32,7 @@ export default function RiskCalculator({ userId, initialBalance, onCalculate, co
       }
     });
     return () => unsubscribe();
-  }, [userId, initialBalance]);
+  }, [userId, accountId, initialBalance]);
 
   useEffect(() => {
     const riskAmt = (balance * riskPercent) / 100;

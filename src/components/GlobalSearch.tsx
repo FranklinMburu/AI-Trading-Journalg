@@ -5,8 +5,9 @@ import { Trade, Strategy, JournalEntry } from '../types';
 import { Search, X, History, Target, BookOpen, ArrowRight, Loader2, Command } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 
+import { useAccount } from '../contexts/AccountContext';
+
 interface GlobalSearchProps {
-  userId: string;
   onClose: () => void;
   onNavigate: (tab: string, id?: string) => void;
 }
@@ -20,7 +21,11 @@ interface SearchResult {
   data: any;
 }
 
-export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSearchProps) {
+export default function GlobalSearch({ onClose, onNavigate }: GlobalSearchProps) {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -64,7 +69,7 @@ export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSear
 
   useEffect(() => {
     const performSearch = async () => {
-      if (searchTerm.length < 2) {
+      if (searchTerm.length < 2 || !userId || !accountId) {
         setResults([]);
         return;
       }
@@ -73,14 +78,10 @@ export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSear
       try {
         const searchLower = searchTerm.toLowerCase();
         
-        // In a real production app, we'd use Algolia or a specialized search index.
-        // For this app, we'll fetch recent items and filter client-side for simplicity,
-        // or do basic Firestore queries if possible.
-        
         // 1. Search Trades (by symbol)
         const tradesQuery = query(
-          collection(db, 'trades'),
-          where('userId', '==', userId),
+          collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+          where('isDemo', '==', isDemoMode),
           limit(50)
         );
         const tradesSnap = await getDocs(tradesQuery);
@@ -98,8 +99,8 @@ export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSear
 
         // 2. Search Strategies (by name)
         const strategiesQuery = query(
-          collection(db, 'strategies'),
-          where('userId', '==', userId),
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies'),
+          where('isDemo', '==', isDemoMode),
           limit(20)
         );
         const strategiesSnap = await getDocs(strategiesQuery);
@@ -117,8 +118,8 @@ export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSear
 
         // 3. Search Journal Entries (by content)
         const journalQuery = query(
-          collection(db, 'journal'),
-          where('userId', '==', userId),
+          collection(db, 'users', userId, 'accounts', accountId, 'journal_entries'),
+          where('isDemo', '==', isDemoMode),
           limit(50)
         );
         const journalSnap = await getDocs(journalQuery);
@@ -147,7 +148,7 @@ export default function GlobalSearch({ userId, onClose, onNavigate }: GlobalSear
 
     const timeoutId = setTimeout(performSearch, 300);
     return () => clearTimeout(timeoutId);
-  }, [searchTerm, userId]);
+  }, [searchTerm, userId, accountId, isDemoMode]);
 
   const handleSelect = (result: SearchResult) => {
     if (result.type === 'trade') {

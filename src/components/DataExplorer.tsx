@@ -10,7 +10,13 @@ interface CollectionData {
   [key: string]: any;
 }
 
-export default function DataExplorer({ userId, isAdmin }: { userId: string; isAdmin: boolean }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function DataExplorer() {
+  const { activeAccount, selectedAccountId, isDemoMode, isAdmin } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [activeCollection, setActiveCollection] = useState<'trades' | 'strategies' | 'settings' | 'users'>('trades');
   const [data, setData] = useState<CollectionData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,14 +26,28 @@ export default function DataExplorer({ userId, isAdmin }: { userId: string; isAd
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!userId || (!accountId && activeCollection !== 'users')) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     let q;
     
-    // If not admin, filter by userId for collections that have it
-    if (!isAdmin && activeCollection !== 'users') {
-      q = query(collection(db, activeCollection), where('userId', '==', userId));
+    if (activeCollection === 'users') {
+      if (!isAdmin) {
+        setLoading(false);
+        return;
+      }
+      q = query(collection(db, 'users'));
     } else {
-      q = query(collection(db, activeCollection));
+      // Nested collections
+      const baseCol = collection(db, 'users', userId, 'accounts', accountId!, activeCollection);
+      if (activeCollection === 'trades' || activeCollection === 'strategies') {
+         q = query(baseCol, where('isDemo', '==', isDemoMode));
+      } else {
+        q = query(baseCol);
+      }
     }
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -43,7 +63,7 @@ export default function DataExplorer({ userId, isAdmin }: { userId: string; isAd
     });
 
     return () => unsubscribe();
-  }, [activeCollection, userId, isAdmin]);
+  }, [activeCollection, userId, accountId, isAdmin, isDemoMode]);
 
   const toggleExpand = (id: string) => {
     const newExpanded = new Set(expandedDocs);
@@ -63,10 +83,15 @@ export default function DataExplorer({ userId, isAdmin }: { userId: string; isAd
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this record? This action cannot be undone.')) return;
-    
+    if (!userId || !accountId) return;
+
     setDeletingId(id);
     try {
-      await deleteDoc(doc(db, activeCollection, id));
+      if (activeCollection === 'users') {
+        await deleteDoc(doc(db, 'users', id));
+      } else {
+        await deleteDoc(doc(db, 'users', userId, 'accounts', accountId, activeCollection, id));
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `${activeCollection}/${id}`);
     } finally {
@@ -87,10 +112,10 @@ export default function DataExplorer({ userId, isAdmin }: { userId: string; isAd
   };
 
   const handleSeed = async () => {
-    if (activeCollection !== 'trades') return;
+    if (activeCollection !== 'trades' || !userId || !accountId) return;
     
     try {
-      await addDoc(collection(db, 'trades'), {
+      await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
         userId,
         symbol: 'XAUUSD',
         direction: 'LONG',
@@ -102,7 +127,8 @@ export default function DataExplorer({ userId, isAdmin }: { userId: string; isAd
         status: 'CLOSED',
         timestamp: new Date().toISOString(),
         notes: 'Sample trade for testing Data Explorer',
-        strategyId: 'sample-strategy'
+        strategyId: 'sample-strategy',
+        isDemo: true
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'trades');

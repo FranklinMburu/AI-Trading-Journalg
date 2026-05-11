@@ -4,6 +4,7 @@ export type TradeStatus = 'OPEN' | 'CLOSED';
 export interface Trade {
   id?: string;
   userId: string;
+  accountId: string;
   symbol: string;
   entryPrice: number;
   exitPrice?: number;
@@ -18,6 +19,7 @@ export interface Trade {
   notes?: string;
   strategyId?: string;
   tags?: string[];
+  isDemo?: boolean;
 }
 
 export interface UserSettings {
@@ -43,11 +45,13 @@ export interface UserSettings {
 export interface JournalEntry {
   id?: string;
   userId: string;
+  accountId?: string;
   tradeId?: string;
   content: string;
   timestamp: string;
   mood?: string;
   tags?: string[];
+  isDemo?: boolean;
 }
 
 export interface Strategy {
@@ -58,11 +62,26 @@ export interface Strategy {
   rules?: string;
   notes?: string;
   createdAt?: string;
+  isDemo?: boolean;
 }
 
 export interface EquityPoint {
   time: string;
   value: number;
+}
+
+export interface TradingAccount {
+  id?: string;
+  userId: string;
+  accountNumber: string;
+  name: string;
+  broker?: string;
+  currency: string;
+  balance: number;
+  equity?: number;
+  type?: string;
+  createdAt: string;
+  lastUpdate: string;
 }
 
 export interface UserStats {

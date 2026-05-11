@@ -6,7 +6,13 @@ import { BookOpen, Plus, Calendar, Smile, Tag, Save, X, Link as LinkIcon, Trendi
 import { format } from 'date-fns';
 import { cn, formatCurrency } from '../lib/utils';
 
-export default function Journal({ userId, initialTradeId, onClearInitialTrade }: { userId: string, initialTradeId?: string, onClearInitialTrade?: () => void }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function Journal({ initialTradeId, onClearInitialTrade }: { initialTradeId?: string, onClearInitialTrade?: () => void }) {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
@@ -38,9 +44,11 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
   };
 
   useEffect(() => {
+    if (!userId || !accountId) return;
+
     const q = query(
-      collection(db, 'journal_entries'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'journal_entries'),
+      where('isDemo', '==', isDemoMode),
       orderBy('timestamp', 'desc')
     );
 
@@ -51,8 +59,8 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
     });
 
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       orderBy('entryTime', 'desc')
     );
 
@@ -66,24 +74,26 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
       unsubscribe();
       unsubscribeTrades();
     };
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   const handleSave = async () => {
-    if (!newContent.trim()) return;
+    if (!newContent.trim() || !userId || !accountId) return;
     try {
       const entryData = {
         userId,
+        accountId,
         content: newContent,
         mood,
         tags,
         tradeId: selectedTradeId || null,
         timestamp: editingEntry ? editingEntry.timestamp : new Date().toISOString(),
+        isDemo: isDemoMode
       };
 
       if (editingEntry?.id) {
-        await updateDoc(doc(db, 'journal_entries', editingEntry.id), entryData);
+        await updateDoc(doc(db, 'users', userId, 'accounts', accountId, 'journal_entries', editingEntry.id), entryData);
       } else {
-        await addDoc(collection(db, 'journal_entries'), entryData);
+        await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'journal_entries'), entryData);
       }
 
       resetForm();
@@ -112,9 +122,9 @@ export default function Journal({ userId, initialTradeId, onClearInitialTrade }:
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this entry?')) return;
+    if (!window.confirm('Are you sure you want to delete this entry?') || !userId || !accountId) return;
     try {
-      await deleteDoc(doc(db, 'journal_entries', id));
+      await deleteDoc(doc(db, 'users', userId, 'accounts', accountId, 'journal_entries', id));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'journal_entries');
     }

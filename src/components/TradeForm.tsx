@@ -3,20 +3,29 @@ import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { TradeDirection, TradeStatus, Strategy } from '../types';
 import { X, Save, Calculator, Shield } from 'lucide-react';
-import { formatCurrency, cn } from '../lib/utils';
+import { formatCurrency, cn, calculateTradePnL } from '../lib/utils';
 import RiskCalculator from './RiskCalculator';
 
 interface TradeFormProps {
   userId: string;
+  accountId?: string;
+  isDemoMode: boolean;
   onClose: () => void;
 }
 
-export default function TradeForm({ userId, onClose }: TradeFormProps) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean; onClose: () => void }) {
+  const { activeAccount, selectedAccountId } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [loading, setLoading] = useState(false);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [showRiskCalc, setShowRiskCalc] = useState(false);
   const [formData, setFormData] = useState({
     symbol: '',
+    accountId: accountId || '',
     entryPrice: '',
     exitPrice: '',
     quantity: '',
@@ -30,6 +39,24 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
     tags: '',
   });
 
+  useEffect(() => {
+    if (!userId || !accountId) return;
+
+    const fetchStrategies = async () => {
+      try {
+        const q = query(
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+          where('isDemo', '==', isDemoMode)
+        );
+        const snapshot = await getDocs(q);
+        setStrategies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Strategy)));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, 'strategies');
+      }
+    };
+    fetchStrategies();
+  }, [userId, accountId, isDemoMode]);
+
   const calculatePnL = () => {
     const entry = parseFloat(formData.entryPrice);
     const exit = parseFloat(formData.exitPrice);
@@ -37,11 +64,7 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
     
     if (isNaN(entry) || isNaN(exit) || isNaN(qty)) return null;
     
-    if (formData.direction === 'LONG') {
-      return (exit - entry) * qty;
-    } else {
-      return (entry - exit) * qty;
-    }
+    return calculateTradePnL(entry, exit, qty, formData.direction);
   };
 
   const calculateRisk = () => {
@@ -113,21 +136,9 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
 
   const visualizer = getVisualizerData();
 
-  useEffect(() => {
-    const fetchStrategies = async () => {
-      try {
-        const q = query(collection(db, 'strategies'), where('userId', '==', userId));
-        const snapshot = await getDocs(q);
-        setStrategies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Strategy)));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, 'strategies');
-      }
-    };
-    fetchStrategies();
-  }, [userId]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading || !userId || !accountId) return;
     setLoading(true);
 
     try {
@@ -141,8 +152,9 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
       const entryTime = formData.entryTime ? new Date(formData.entryTime).toISOString() : new Date().toISOString();
       const tags = formData.tags.split(',').map(t => t.trim()).filter(t => t !== '');
 
-      await addDoc(collection(db, 'trades'), {
+      await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
         userId,
+        accountId: accountId || "Manual",
         symbol: formData.symbol.toUpperCase(),
         entryPrice,
         exitPrice,
@@ -157,6 +169,7 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
         notes: formData.notes,
         strategyId: formData.strategyId || undefined,
         tags,
+        isDemo: isDemoMode
       });
 
       onClose();
@@ -259,7 +272,6 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
                   <X size={14} />
                 </button>
                 <RiskCalculator 
-                  userId={userId} 
                   compact
                   entryPrice={parseFloat(formData.entryPrice) || undefined}
                   stopLossPrice={parseFloat(formData.stopLoss) || undefined}
@@ -291,9 +303,9 @@ export default function TradeForm({ userId, onClose }: TradeFormProps) {
                   value={formData.exitPrice}
                   onChange={(e) => setFormData({ ...formData, exitPrice: e.target.value })}
                 />
-                {formData.exitPrice && currentPnL !== null && (
+                {formData.status === 'CLOSED' && formData.exitPrice && currentPnL !== null && (
                   <div className={cn(
-                    "text-xs font-bold mt-1 flex items-center justify-between",
+                    "text-xs font-bold mt-1.5 flex items-center justify-between px-1",
                     currentPnL >= 0 ? "text-emerald-400" : "text-rose-400"
                   )}>
                     <span>Estimated PnL:</span>

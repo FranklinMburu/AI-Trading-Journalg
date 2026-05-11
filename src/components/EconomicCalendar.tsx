@@ -15,12 +15,18 @@ interface EconomicEvent {
   previous?: string;
 }
 
-export default function EconomicCalendar({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function EconomicCalendar() {
+  const { activeAccount } = useAccount();
+  const userId = activeAccount?.userId;
+
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EconomicEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const fetchEvents = async () => {
+    if (!userId) return;
     const cacheKey = `economic_calendar_${userId}`;
     const cached = getCache(cacheKey);
 
@@ -59,12 +65,19 @@ export default function EconomicCalendar({ userId }: { userId: string }) {
       });
 
       const data = JSON.parse(response.text);
-      const sortedData = data.sort((a: EconomicEvent, b: EconomicEvent) => new Date(a.time).getTime() - new Date(b.time).getTime());
-      setEvents(sortedData);
-      setCache(cacheKey, sortedData);
+      if (Array.isArray(data)) {
+        const sortedData = data.sort((a: EconomicEvent, b: EconomicEvent) => new Date(a.time).getTime() - new Date(b.time).getTime());
+        setEvents(sortedData);
+        setCache(cacheKey, sortedData);
+      } else {
+        throw new Error("Invalid events data received");
+      }
     } catch (err) {
       console.error('Error fetching economic events:', err);
-      setError('Failed to fetch economic calendar. Please try again.');
+      setError('Economic data service is temporarily unavailable. Please trade with caution during high-impact news.');
+      // Attempt to load from cache even if expired as fallback
+      const cached = getCache(cacheKey);
+      if (cached) setEvents(cached.data);
     } finally {
       setLoading(false);
     }

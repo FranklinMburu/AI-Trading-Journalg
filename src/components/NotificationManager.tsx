@@ -14,13 +14,21 @@ interface Notification {
   timestamp: number;
 }
 
-export default function NotificationManager({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function NotificationManager() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+  
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [lastProcessedTradeId, setLastProcessedTradeId] = useState<string | null>(null);
 
   useEffect(() => {
-    const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) setSettings(snapshot.docs[0].data() as UserSettings);
     }, (error) => {
@@ -28,8 +36,8 @@ export default function NotificationManager({ userId }: { userId: string }) {
     });
 
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       where('status', '==', 'CLOSED'),
       orderBy('exitTime', 'desc'),
       limit(1)
@@ -70,7 +78,7 @@ export default function NotificationManager({ userId }: { userId: string }) {
       unsubscribeSettings();
       unsubscribeTrades();
     };
-  }, [userId, settings, lastProcessedTradeId]);
+  }, [userId, accountId, settings, lastProcessedTradeId, isDemoMode]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'timestamp'>) => {
     const id = Math.random().toString(36).substr(2, 9);

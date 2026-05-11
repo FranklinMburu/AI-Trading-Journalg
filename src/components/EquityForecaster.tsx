@@ -17,16 +17,23 @@ interface SimulationResult {
   };
 }
 
-export default function EquityForecaster({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function EquityForecaster() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [startingBalance, setStartingBalance] = useState(10000);
   const [simulationDays, setSimulationDays] = useState(180); // 6 months
   const [tradesPerDay, setTradesPerDay] = useState(1);
-  const [simResult, setSimResult] = useState<SimulationResult | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'settings'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const q = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const settings = snapshot.docs[0].data() as UserSettings;
@@ -36,12 +43,14 @@ export default function EquityForecaster({ userId }: { userId: string }) {
       }
     });
     return () => unsubscribe();
-  }, [userId]);
+  }, [userId, accountId]);
 
   useEffect(() => {
+    if (!userId || !accountId) return;
+
     const q = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       where('status', '==', 'CLOSED'),
       orderBy('exitTime', 'desc')
     );
@@ -56,24 +65,18 @@ export default function EquityForecaster({ userId }: { userId: string }) {
     });
 
     return () => unsubscribe();
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
-  const runSimulation = () => {
-    if (trades.length < 5) return;
+  const simResult = useMemo(() => {
+    if (trades.length < 5) return null;
 
     const closedTrades = trades.filter(t => t.pnl !== undefined);
-    const wins = closedTrades.filter(t => (t.pnl || 0) > 0);
-    const losses = closedTrades.filter(t => (t.pnl || 0) < 0);
-    
-    const winRate = wins.length / closedTrades.length;
-    const avgWin = wins.reduce((acc, t) => acc + (t.pnl || 0), 0) / (wins.length || 1);
-    const avgLoss = Math.abs(losses.reduce((acc, t) => acc + (t.pnl || 0), 0) / (losses.length || 1));
+    const pnlPool = closedTrades.map(t => t.pnl || 0);
 
-    const numSimulations = 100; // Keep it responsive
-    const totalTrades = simulationDays * tradesPerDay;
+    const numSimulations = 100;
     const allPaths: { day: number; value: number }[][] = [];
     let profitableSims = 0;
-    let maxDrawdowns: number[] = [];
+    const maxDrawdowns: number[] = [];
 
     for (let i = 0; i < numSimulations; i++) {
       let currentBalance = startingBalance;
@@ -83,13 +86,13 @@ export default function EquityForecaster({ userId }: { userId: string }) {
 
       for (let day = 1; day <= simulationDays; day++) {
         for (let t = 0; t < tradesPerDay; t++) {
-          const isWin = Math.random() < winRate;
-          const pnl = isWin ? avgWin : -avgLoss;
+          const randomIndex = Math.floor(Math.random() * pnlPool.length);
+          const pnl = pnlPool[randomIndex];
           currentBalance += pnl;
         }
         
         peak = Math.max(peak, currentBalance);
-        const dd = (peak - currentBalance) / peak;
+        const dd = peak === 0 ? 0 : (peak - currentBalance) / peak;
         maxDD = Math.max(maxDD, dd);
         
         path.push({ day, value: Math.max(0, currentBalance) });
@@ -100,14 +103,18 @@ export default function EquityForecaster({ userId }: { userId: string }) {
       allPaths.push(path);
     }
 
-    const finalBalances = allPaths.map(p => p[p.length - 1].value).sort((a, b) => a - b);
+    const sortedPaths = [...allPaths].sort((a, b) => a[a.length - 1].value - b[b.length - 1].value);
+    const medianPath = sortedPaths[Math.floor(numSimulations / 2)];
+    const finalBalances = sortedPaths.map(p => p[p.length - 1].value);
+    
     const median = finalBalances[Math.floor(numSimulations / 2)];
     const best = finalBalances[numSimulations - 1];
     const worst = finalBalances[0];
     const avgMaxDD = maxDrawdowns.reduce((a, b) => a + b, 0) / numSimulations;
 
-    setSimResult({
-      paths: allPaths.slice(0, 20), // Only show 20 paths for clarity
+    return {
+      paths: allPaths.slice(0, 20),
+      medianPath,
       stats: {
         median,
         best,
@@ -115,13 +122,7 @@ export default function EquityForecaster({ userId }: { userId: string }) {
         maxDrawdownProb: avgMaxDD,
         probOfProfit: profitableSims / numSimulations
       }
-    });
-  };
-
-  useEffect(() => {
-    if (trades.length >= 5) {
-      runSimulation();
-    }
+    };
   }, [trades, startingBalance, simulationDays, tradesPerDay]);
 
   if (loading) {
@@ -263,13 +264,14 @@ export default function EquityForecaster({ userId }: { userId: string }) {
                   ))}
                   {/* Median Path Highlight */}
                   <Line 
-                    data={simResult.paths[0]} // Just as a placeholder for the median line if we wanted to calculate it specifically
+                    data={simResult.medianPath}
                     type="monotone"
                     dataKey="value"
                     stroke="#10b981"
                     strokeWidth={3}
                     dot={false}
                     opacity={0.8}
+                    name="Median Path"
                   />
                 </LineChart>
               </ResponsiveContainer>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { collection, query, where, onSnapshot, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, Strategy } from '../types';
@@ -33,15 +34,20 @@ interface BacktestResult {
   trades: Trade[];
 }
 
-export default function StrategyAnalysis({ userId }: { userId: string }) {
-  const [stats, setStats] = useState<StrategyStats[]>([]);
+import { useAccount } from '../contexts/AccountContext';
+
+export default function StrategyAnalysis() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [loading, setLoading] = useState(true);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newStrategyName, setNewStrategyName] = useState('');
   const [newStrategyRules, setNewStrategyRules] = useState('');
   const [newStrategyNotes, setNewStrategyNotes] = useState('');
   const [manualTradeIds, setManualTradeIds] = useState('');
-  const [unassignedTrades, setUnassignedTrades] = useState<Trade[]>([]);
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string>>(new Set());
   const [viewingStrategy, setViewingStrategy] = useState<StrategyStats | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
@@ -54,20 +60,40 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
+  // AI Global Context Heartbeat - Strategy Analysis
+  useEffect(() => {
+    if (viewingStrategy) {
+      window.dispatchEvent(new CustomEvent('nexus-global-context', {
+        detail: {
+          source: 'Strategy Overview',
+          data: `User is analyzing strategy "${viewingStrategy.name}". Stats: Win Rate ${formatPercent(viewingStrategy.winRate)}, Profit Factor ${viewingStrategy.profitFactor.toFixed(2)}, Total Trades ${viewingStrategy.tradeCount}. Account: ${accountId || 'All'}.`
+        }
+      }));
+    } else if (backtestResult) {
+       window.dispatchEvent(new CustomEvent('nexus-global-context', {
+        detail: {
+          source: 'Backtest Result',
+          data: `User just ran a backtest for "${backtestResult.strategyName}". Result: PnL ${formatCurrency(backtestResult.totalPnL)}, Win Rate ${formatPercent(backtestResult.winRate)}, Profit Factor ${backtestResult.profitFactor.toFixed(2)}. Account: ${accountId || 'All'}.`
+        }
+      }));
+    }
+  }, [viewingStrategy, backtestResult, accountId]);
+
   // Filter state
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
   const handleAddStrategy = async () => {
-    if (!newStrategyName.trim()) return;
+    if (!newStrategyName.trim() || !userId || !accountId) return;
     try {
-      const strategyRef = await addDoc(collection(db, 'strategies'), {
+      const strategyRef = await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'strategies'), {
         userId,
         name: newStrategyName,
         rules: newStrategyRules,
         notes: newStrategyNotes,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        isDemo: isDemoMode
       });
 
       // Update associated trades
@@ -81,7 +107,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
 
       if (allSelectedIds.size > 0) {
         const updatePromises = Array.from(allSelectedIds).map(tradeId => 
-          updateDoc(doc(db, 'trades', tradeId), { strategyId: strategyRef.id })
+          updateDoc(doc(db, 'users', userId, 'accounts', accountId, 'trades', tradeId), { strategyId: strategyRef.id })
         );
         await Promise.all(updatePromises);
       }
@@ -98,6 +124,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
   };
 
   const handleSeedXAUUSDData = async () => {
+    if (!userId || !accountId) return;
     setIsSeeding(true);
     try {
       const response = await generateContent({
@@ -131,20 +158,22 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       const trades = JSON.parse(response.text);
 
       // Create a strategy for these trades
-      const strategyRef = await addDoc(collection(db, 'strategies'), {
+      const strategyRef = await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'strategies'), {
         userId,
         name: 'XAU/USD Trend Following',
         rules: '1. Identify trend on Daily chart.\n2. Enter on 4H pullback to 20 EMA.\n3. Stop loss below recent swing low.\n4. Take profit at 2:1 Reward:Risk.',
         notes: 'Seeded historical data for XAU/USD performance analysis.',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        isDemo: true
       });
 
       // Add trades to Firestore
       const tradePromises = trades.map((trade: any) => 
-        addDoc(collection(db, 'trades'), {
+        addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
           ...trade,
           userId,
-          strategyId: strategyRef.id
+          strategyId: strategyRef.id,
+          isDemo: true
         })
       );
 
@@ -171,7 +200,12 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
   const [strategiesMap, setStrategiesMap] = useState<Map<string, { name: string; createdAt: string; rules: string }>>(new Map());
 
   useEffect(() => {
-    const q = query(collection(db, 'strategies'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const q = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+      where('isDemo', '==', isDemoMode)
+    );
     return onSnapshot(q, (snapshot) => {
       const sMap = new Map<string, { name: string; createdAt: string; rules: string }>();
       snapshot.docs.forEach(doc => {
@@ -183,29 +217,31 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
         });
       });
       setStrategiesMap(sMap);
+      setIsDataLoaded(true);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'strategies');
+      setIsDataLoaded(true);
     });
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   useEffect(() => {
-    const q = query(collection(db, 'trades'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const q = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'), 
+      where('isDemo', '==', isDemoMode)
+    );
     return onSnapshot(q, (snapshot) => {
       setRawTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
+      setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'trades');
+      setLoading(false);
     });
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
-  useEffect(() => {
-    if (rawTrades.length === 0 && strategiesMap.size === 0) {
-      // Still loading or no data
-      if (!loading) setLoading(false); // Ensure we don't stay in loading forever if no data
-      return;
-    }
-
-    const unassigned = rawTrades.filter(t => !t.strategyId || t.strategyId === 'unassigned');
-    setUnassignedTrades(unassigned);
+  const stats = React.useMemo(() => {
+    if (!isDataLoaded && rawTrades.length === 0) return [];
 
     const closedTrades = rawTrades.filter(t => t.status === 'CLOSED').sort((a, b) => new Date(a.entryTime).getTime() - new Date(b.entryTime).getTime());
 
@@ -224,7 +260,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       
       const grossProfits = trades.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + (t.pnl || 0), 0);
       const grossLosses = Math.abs(trades.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + (t.pnl || 0), 0));
-      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? 10 : 0) : grossProfits / grossLosses;
+      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? grossProfits : 0) : grossProfits / grossLosses;
 
       let cumulative = 0;
       const equityCurve = trades.map((t, index) => {
@@ -257,9 +293,12 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       });
     });
 
-    setStats(calculatedStats.sort((a, b) => b.totalPnL - a.totalPnL));
-    setLoading(false);
-  }, [rawTrades, strategiesMap, userId]);
+    return calculatedStats.sort((a, b) => b.totalPnL - a.totalPnL);
+  }, [rawTrades, strategiesMap, isDataLoaded]);
+
+  const unassignedTrades = React.useMemo(() => {
+    return rawTrades.filter(t => !t.strategyId || t.strategyId === 'unassigned');
+  }, [rawTrades]);
 
   const filteredStats = stats.filter(s => {
     const matchesName = s.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -287,7 +326,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
       
       const grossProfits = strategyTrades.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + (t.pnl || 0), 0);
       const grossLosses = Math.abs(strategyTrades.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + (t.pnl || 0), 0));
-      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? 10 : 0) : grossProfits / grossLosses;
+      const profitFactor = grossLosses === 0 ? (grossProfits > 0 ? grossProfits : 0) : grossProfits / grossLosses;
 
       let cumulative = 0;
       const equityCurve = strategyTrades.map((t, index) => {
@@ -324,7 +363,7 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
     setIsAnalyzing(true);
     try {
       const prompt = `
-        As a professional trading performance analyst, evaluate this trading strategy based on its backtest results.
+        As a professional trading performance analyst and risk manager, evaluate this trading strategy based on its backtest results.
         
         Strategy Name: ${backtestResult.strategyName}
         Strategy Rules: ${strategiesMap.get(backtestStrategyId)?.rules || 'No rules defined'}
@@ -336,13 +375,14 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
         - Total Trades: ${backtestResult.tradeCount}
         - Avg. Trade: ${formatCurrency(backtestResult.totalPnL / backtestResult.tradeCount)}
         
-        Please provide:
-        1. A critical assessment of the strategy's performance.
-        2. Identification of potential flaws or risks based on the rules and results.
-        3. Specific, actionable recommendations to improve the Win Rate or Profit Factor.
-        4. An overall "Strategy Score" out of 100.
+        Please provide a deep audit including:
+        1. **Performance Verdict**: A critical assessment of the strategy's viability.
+        2. **Risk Analysis**: Identification of potential flaws, "black swan" risks, or psychological traps based on the rules and results.
+        3. **Optimization Roadmap**: Specific, actionable technical or behavioral recommendations to improve the Win Rate, Profit Factor, or Risk-Adjusted Return.
+        4. **Market Context**: How this strategy might perform in different market regimes (Trending vs. Ranging).
+        5. **Strategy Score**: An overall "Nexus Viability Score" out of 100.
         
-        Format the response in clean Markdown.
+        Format the response in clean, professional Markdown with clear headings.
       `;
 
       const result = await generateContent({
@@ -878,37 +918,85 @@ export default function StrategyAnalysis({ userId }: { userId: string }) {
                       <button 
                         onClick={handleAiAnalysis}
                         disabled={isAnalyzing}
-                        className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-500 transition-all hover:bg-emerald-500 hover:text-zinc-950 disabled:opacity-50"
+                        className={cn(
+                          "relative flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all active:scale-95 overflow-hidden",
+                          isAnalyzing 
+                            ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
+                            : "bg-white text-zinc-950 hover:bg-emerald-400 group"
+                        )}
                       >
                         {isAnalyzing ? (
-                          <>
-                            <div className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-                            Analyzing...
-                          </>
+                          <div className="flex items-center gap-1">
+                            <motion.span animate={{ scale: [1, 1.4, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="h-1 w-1 rounded-full bg-indigo-500" />
+                            <motion.span animate={{ scale: [1, 1.4, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="h-1 w-1 rounded-full bg-emerald-500" />
+                            <motion.span animate={{ scale: [1, 1.4, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="h-1 w-1 rounded-full bg-cyan-500" />
+                            <span className="ml-2 uppercase tracking-tighter">Analyzing Trace...</span>
+                          </div>
                         ) : (
                           <>
-                            <Sparkles size={14} />
-                            Get AI Insights
+                            <Sparkles size={14} className="text-zinc-950 group-hover:animate-pulse" />
+                            Generate Auditor Report
                           </>
                         )}
                       </button>
                     </div>
                     
                     {aiAnalysis && (
-                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-6 animate-in fade-in slide-in-from-top-4 duration-300">
-                        <div className="mb-4 flex items-center gap-2 text-emerald-500">
-                          <Sparkles size={18} />
-                          <h6 className="font-bold">AI Performance Insights</h6>
+                      <div className="rounded-2xl border border-white/5 bg-zinc-900/40 p-8 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-500">
+                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 via-transparent to-transparent opacity-50" />
+                        
+                        <div className="relative z-10">
+                          <div className="mb-6 flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                              <div className="relative flex h-10 w-10 items-center justify-center">
+                                <div className="absolute inset-0 animate-spin-slow rounded-xl bg-gradient-to-tr from-indigo-500 via-emerald-400 to-cyan-400 blur-[2px] opacity-40" />
+                                <div className="relative flex h-full w-full items-center justify-center rounded-xl bg-zinc-950 text-white">
+                                  <Sparkles size={20} className="text-emerald-400" />
+                                </div>
+                              </div>
+                              <div>
+                                <h6 className="text-[10px] font-black uppercase tracking-[0.3em] text-emerald-500/80">Nexus Intelligence Audit</h6>
+                                <h5 className="text-sm font-bold text-white">Performance Roadmap Summary</h5>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setAiAnalysis(null)}
+                              className="rounded-full bg-white/5 p-2 text-zinc-500 transition-all hover:bg-white/10 hover:text-white"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+
+                          <div className="prose prose-invert prose-sm max-w-none prose-emerald bg-black/20 p-6 rounded-2xl border border-white/5 shadow-inner">
+                            <Markdown>{aiAnalysis}</Markdown>
+                          </div>
+                          
+                          <div className="mt-8 flex items-center justify-between border-t border-white/5 pt-6">
+                            <button
+                              onClick={() => {
+                                window.dispatchEvent(new CustomEvent('nexus-chat-context', {
+                                  detail: {
+                                    message: "Let's discuss my strategy backtest results and your suggestions further.",
+                                    context: `
+                                      Strategy: ${backtestResult.strategyName}
+                                      Stats: PnL ${backtestResult.totalPnL}, Win Rate ${backtestResult.winRate}, Profit Factor ${backtestResult.profitFactor}
+                                      Total Trades: ${backtestResult.tradeCount}
+                                      AI Initial Analysis: ${aiAnalysis}
+                                    `.trim()
+                                  }
+                                }));
+                              }}
+                              className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-950 hover:bg-emerald-400 transition-all active:scale-95 group shadow-lg shadow-emerald-500/10"
+                            >
+                              <Sparkles size={12} className="group-hover:scale-125 transition-transform" />
+                              Deep Dive with Nexus
+                            </button>
+                            
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">
+                              Verified Audit Trace • Nexus v1.0
+                            </span>
+                          </div>
                         </div>
-                        <div className="prose prose-invert prose-sm max-w-none prose-emerald">
-                          <Markdown>{aiAnalysis}</Markdown>
-                        </div>
-                        <button 
-                          onClick={() => setAiAnalysis(null)}
-                          className="mt-4 text-xs font-medium text-zinc-500 hover:text-zinc-300"
-                        >
-                          Dismiss Analysis
-                        </button>
                       </div>
                     )}
 

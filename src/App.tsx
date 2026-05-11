@@ -11,32 +11,55 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
-import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator, Database, Search, Command, Loader2, ArrowUp } from 'lucide-react';
+import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator, Database, Search, Command, Loader2, ArrowUp, Zap } from 'lucide-react';
 import { cn } from './lib/utils';
 import { db, handleFirestoreError, OperationType } from './firebase';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { Trade, Strategy, JournalEntry } from './types';
+import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
+import { Trade, Strategy, JournalEntry, TradingAccount } from './types';
+import AIChatWidget from './components/AIChatWidget';
+import GlobalSearch from './components/GlobalSearch';
+import NexusAuditor from './components/NexusAuditor';
+const safeLazy = (importFn: () => Promise<any>) => {
+  return lazy(async () => {
+    try {
+      return await importFn();
+    } catch (error) {
+      console.error('Lazy loading failed, retrying...', error);
+      // Retry once after 1s
+      return new Promise((resolve, reject) => {
+        setTimeout(async () => {
+          try {
+            resolve(await importFn());
+          } catch (err) {
+            // If still failing, reload the page to get the latest bundle info
+            console.error('Lazy loading failed twice. Reloading page...');
+            window.location.reload();
+          }
+        }, 1000);
+      });
+    }
+  }) as any;
+};
 
-// Lazy load components for performance
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const TradeForm = lazy(() => import('./components/TradeForm'));
-const TradeList = lazy(() => import('./components/TradeList'));
-const AIInsights = lazy(() => import('./components/AIInsights'));
-const Journal = lazy(() => import('./components/Journal'));
-const StrategyAnalysis = lazy(() => import('./components/StrategyAnalysis'));
-const Calendar = lazy(() => import('./components/Calendar'));
-const Settings = lazy(() => import('./components/Settings'));
-const NotificationManager = lazy(() => import('./components/NotificationManager'));
-const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
-const EconomicCalendar = lazy(() => import('./components/EconomicCalendar'));
-const EquityForecaster = lazy(() => import('./components/EquityForecaster'));
-const PreFlightChecklist = lazy(() => import('./components/PreFlightChecklist'));
-const RiskCalculator = lazy(() => import('./components/RiskCalculator'));
-const DataExplorer = lazy(() => import('./components/DataExplorer'));
-const LandingPage = lazy(() => import('./components/LandingPage'));
-const GlobalSearch = lazy(() => import('./components/GlobalSearch'));
+// Re-enable lazy loading for secondary components to optimize initial load
+const Dashboard = safeLazy(() => import('./components/Dashboard'));
+const TradeForm = safeLazy(() => import('./components/TradeForm'));
+const TradeList = safeLazy(() => import('./components/TradeList'));
+const AIInsights = safeLazy(() => import('./components/AIInsights'));
+const Journal = safeLazy(() => import('./components/Journal'));
+const StrategyAnalysis = safeLazy(() => import('./components/StrategyAnalysis'));
+const Calendar = safeLazy(() => import('./components/Calendar'));
+const Settings = safeLazy(() => import('./components/Settings'));
+const NotificationManager = safeLazy(() => import('./components/NotificationManager'));
+const AdminDashboard = safeLazy(() => import('./components/AdminDashboard'));
+const EconomicCalendar = safeLazy(() => import('./components/EconomicCalendar'));
+const EquityForecaster = safeLazy(() => import('./components/EquityForecaster'));
+const PreFlightChecklist = safeLazy(() => import('./components/PreFlightChecklist'));
+const RiskCalculator = safeLazy(() => import('./components/RiskCalculator'));
+const DataExplorer = safeLazy(() => import('./components/DataExplorer'));
+const LandingPage = safeLazy(() => import('./components/LandingPage'));
 
-type Tab = 'dashboard' | 'trades' | 'journal' | 'insights' | 'strategy' | 'calendar' | 'settings' | 'admin' | 'economic' | 'forecasting' | 'preflight' | 'risk' | 'explorer';
+type Tab = 'dashboard' | 'trades' | 'journal' | 'insights' | 'strategy' | 'calendar' | 'settings' | 'admin' | 'economic' | 'forecasting' | 'preflight' | 'risk' | 'explorer' | 'nexus';
 
 // Loading fallback component
 const TabLoading = () => (
@@ -48,10 +71,10 @@ const TabLoading = () => (
   </div>
 );
 
+import { useAccount } from './contexts/AccountContext';
+
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const { user, isAdmin, isDemoMode, setIsDemoMode, activeAccount, selectedAccountId, setSelectedAccountId, accounts, isLoading } = useAccount();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [isTradeFormOpen, setIsTradeFormOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -61,57 +84,31 @@ export default function App() {
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [preSelectedTradeId, setPreSelectedTradeId] = useState<string | null>(null);
 
+  // AI Global Context Heartbeat
+  useEffect(() => {
+    if (!user) return;
+    const broadcastContext = () => {
+      window.dispatchEvent(new CustomEvent('nexus-global-context', {
+        detail: {
+          source: 'System Navigation',
+          data: `User is currently on the ${activeTab} tab. Account: ${selectedAccountId || 'All'}. Site status: Authenticated: ${user.email}.`
+        }
+      }));
+    };
+    
+    broadcastContext();
+  }, [activeTab, user, selectedAccountId]);
+
+  const handleAccountChange = (accNo: string) => {
+    setSelectedAccountId(accNo);
+  };
+
   useEffect(() => {
     const handleScroll = () => {
       setShowBackToTop(window.scrollY > 400);
     };
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        // Sync user profile
-        const userRef = doc(db, 'users', user.uid);
-        try {
-          const userDoc = await getDoc(userRef);
-          const now = new Date().toISOString();
-          
-          if (!userDoc.exists()) {
-            const isDefaultAdmin = user.email === 'franklinmburu05@gmail.com' || user.email === 'franklinvidal198@gmail.com';
-            await setDoc(userRef, {
-              email: user.email,
-              displayName: user.displayName,
-              photoURL: user.photoURL,
-              role: isDefaultAdmin ? 'admin' : 'user',
-              createdAt: now,
-              lastLogin: now
-            });
-            setIsAdmin(isDefaultAdmin);
-          } else {
-            const userData = userDoc.data();
-            const isDefaultAdmin = user.email === 'franklinmburu05@gmail.com' || user.email === 'franklinvidal198@gmail.com';
-            const shouldBeAdmin = isDefaultAdmin || userData.role === 'admin';
-            
-            setIsAdmin(shouldBeAdmin);
-            await updateDoc(userRef, {
-              lastLogin: now,
-              displayName: user.displayName,
-              photoURL: user.photoURL,
-              role: shouldBeAdmin ? 'admin' : 'user'
-            });
-          }
-        } catch (error) {
-          console.error('Error syncing user profile:', error);
-        }
-      } else {
-        setIsAdmin(false);
-      }
-      setUser(user);
-      setLoading(false);
-    });
-    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -134,6 +131,7 @@ export default function App() {
     { id: 'strategy', label: 'Strategy Analysis', icon: Target },
     { id: 'journal', label: 'Journal', icon: BookOpen },
     { id: 'insights', label: 'AI Insights', icon: Brain },
+    { id: 'nexus', label: 'Nexus AI Auditor', icon: Shield },
     { id: 'economic', label: 'Economic Calendar', icon: Globe },
     { id: 'forecasting', label: 'Equity Forecaster', icon: LineChartIcon },
     { id: 'explorer', label: 'Data Explorer', icon: Database },
@@ -141,7 +139,24 @@ export default function App() {
     ...(isAdmin ? [{ id: 'admin', label: 'Admin', icon: Shield }] : []),
   ], [isAdmin]);
 
-  if (loading) {
+  // Pre-fetch background components for speed
+  useEffect(() => {
+    if (user) {
+      // Trigger lazy loads in background
+      const prefetch = () => {
+        import('./components/TradeList');
+        import('./components/Journal');
+        import('./components/AIInsights');
+        import('./components/StrategyAnalysis');
+        import('./components/Settings');
+      };
+      // Delay prefetch slightly to prioritize initial dashboard render
+      const timer = setTimeout(prefetch, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [user]);
+
+  if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-100">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
@@ -150,7 +165,12 @@ export default function App() {
   }
 
   if (!user) {
-    return <LandingPage onSignIn={signInWithGoogle} />;
+    return (
+      <>
+        <LandingPage onSignIn={signInWithGoogle} />
+        <AIChatWidget />
+      </>
+    );
   }
 
   return (
@@ -211,20 +231,20 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="border-t border-zinc-800 p-4">
-          <div className={cn("flex items-center gap-3 py-3", isSidebarCollapsed ? "flex-col px-0" : "px-2")}>
-            <img src={user.photoURL || ''} className="h-8 w-8 shrink-0 rounded-full border border-zinc-700" alt={user.displayName || ''} />
-            {!isSidebarCollapsed && (
-              <div className="flex-1 overflow-hidden">
-                <p className="truncate text-sm font-medium">{user.displayName}</p>
-                <p className="truncate text-xs text-zinc-500">{user.email}</p>
-              </div>
-            )}
-            <button onClick={logout} className="text-zinc-500 hover:text-zinc-100 transition-colors">
-              <LogOut size={16} />
-            </button>
+    <div className="border-t border-zinc-800 p-4">
+      <div className={cn("flex items-center gap-3 py-3", isSidebarCollapsed ? "flex-col px-0" : "px-2")}>
+        <img src={user?.photoURL || ''} className="h-8 w-8 shrink-0 rounded-full border border-zinc-700" alt={user?.displayName || ''} />
+        {!isSidebarCollapsed && (
+          <div className="flex-1 overflow-hidden">
+            <p className="truncate text-sm font-medium">{user?.displayName}</p>
+            <p className="truncate text-xs text-zinc-500">{user?.email}</p>
           </div>
-        </div>
+        )}
+        <button onClick={() => auth.signOut()} className="text-zinc-500 hover:text-zinc-100 transition-colors">
+          <LogOut size={16} />
+        </button>
+      </div>
+    </div>
       </aside>
 
       {/* Main Content */}
@@ -288,7 +308,38 @@ export default function App() {
             </button>
             <h2 className="text-lg font-bold capitalize tracking-tight">{activeTab}</h2>
           </div>
-          <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex items-center gap-2 md:gap-4 font-sans">
+            {/* Account Selector */}
+            {accounts.length > 0 && (
+              <div className="relative flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 transition-all hover:border-zinc-700">
+                <Database size={14} className="text-emerald-500" />
+                <select 
+                  value={selectedAccountId || ''} 
+                  onChange={(e) => handleAccountChange(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-zinc-100 outline-none cursor-pointer"
+                >
+                  {accounts.map(acc => (
+                    <option key={acc.id} value={acc.accountNumber} className="bg-zinc-900 text-zinc-100">
+                      {acc.name} ({acc.currency})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            
+            <button 
+              onClick={() => setIsDemoMode(!isDemoMode)}
+              className={cn(
+                "flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all",
+                isDemoMode 
+                  ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" 
+                  : "bg-zinc-800 text-zinc-400 border border-zinc-700 hover:text-zinc-100"
+              )}
+              title={isDemoMode ? "Switch to Real Mode" : "Switch to Demo Mode"}
+            >
+              <Zap size={14} className={cn(isDemoMode && "fill-amber-500")} />
+              <span className="hidden lg:inline">{isDemoMode ? "DEMO MODE" : "REAL MODE"}</span>
+            </button>
             <button 
               onClick={() => setIsSearchOpen(true)}
               className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-100 sm:h-auto sm:w-auto sm:px-3 sm:py-2 sm:text-sm"
@@ -312,33 +363,54 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-4 md:p-6 scroll-smooth">
           <div className="mx-auto max-w-6xl space-y-6 md:space-y-8">
+            {isDemoMode && (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 animate-in fade-in slide-in-from-top-2">
+                <div className="flex gap-3">
+                  <Zap className="shrink-0 text-amber-500" size={20} />
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-amber-500 uppercase tracking-wider">Demo Mode Active</p>
+                    <p className="text-[11px] leading-relaxed text-zinc-400">
+                      You are currently viewing sample data. This allows you to explore the platform's features without affecting your real trading journal. 
+                      Switch back to <strong>Real Mode</strong> to manage your actual trades.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             <Suspense fallback={<TabLoading />}>
-              {activeTab === 'dashboard' && <Dashboard userId={user.uid} />}
+              {activeTab === 'dashboard' && (
+                <Dashboard 
+                  onOpenTradeForm={() => setIsTradeFormOpen(true)} 
+                />
+              )}
               {activeTab === 'trades' && (
                 <TradeList 
-                  userId={user.uid} 
                   onJournalTrade={(id) => {
                     setPreSelectedTradeId(id);
                     setActiveTab('journal');
                   }}
                 />
               )}
-              {activeTab === 'calendar' && <Calendar userId={user.uid} />}
-              {activeTab === 'strategy' && <StrategyAnalysis userId={user.uid} />}
+              {activeTab === 'calendar' && <Calendar />}
+              {activeTab === 'strategy' && <StrategyAnalysis />}
               {activeTab === 'journal' && (
                 <Journal 
-                  userId={user.uid} 
                   initialTradeId={preSelectedTradeId || undefined}
                   onClearInitialTrade={() => setPreSelectedTradeId(null)}
                 />
               )}
-              {activeTab === 'insights' && <AIInsights userId={user.uid} />}
-              {activeTab === 'preflight' && <PreFlightChecklist userId={user.uid} />}
-              {activeTab === 'risk' && <RiskCalculator userId={user.uid} />}
-              {activeTab === 'economic' && <EconomicCalendar userId={user.uid} />}
-              {activeTab === 'forecasting' && <EquityForecaster userId={user.uid} />}
-              {activeTab === 'explorer' && <DataExplorer userId={user.uid} isAdmin={isAdmin} />}
-              {activeTab === 'settings' && <Settings userId={user.uid} />}
+              {activeTab === 'insights' && <AIInsights />}
+              {activeTab === 'preflight' && <PreFlightChecklist />}
+              {activeTab === 'risk' && <RiskCalculator />}
+              {activeTab === 'economic' && <EconomicCalendar />}
+              {activeTab === 'forecasting' && <EquityForecaster />}
+              {activeTab === 'explorer' && <DataExplorer isAdmin={isAdmin} />}
+              {activeTab === 'nexus' && (
+                <NexusAuditor 
+                  onExecuteTrade={() => setIsTradeFormOpen(true)}
+                />
+              )}
+              {activeTab === 'settings' && <Settings />}
               {activeTab === 'admin' && isAdmin && <AdminDashboard />}
             </Suspense>
           </div>
@@ -348,14 +420,12 @@ export default function App() {
       {/* Trade Form Modal */}
       {isTradeFormOpen && (
         <TradeForm 
-          userId={user.uid} 
           onClose={() => setIsTradeFormOpen(false)} 
         />
       )}
 
       {isSearchOpen && (
         <GlobalSearch 
-          userId={user.uid} 
           onClose={() => setIsSearchOpen(false)} 
           onNavigate={(tab, id) => {
             setActiveTab(tab as Tab);
@@ -367,7 +437,8 @@ export default function App() {
           }}
         />
       )}
-      <NotificationManager userId={user.uid} />
+      <NotificationManager />
+      <AIChatWidget />
     </div>
   );
 }

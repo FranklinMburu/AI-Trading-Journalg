@@ -4,12 +4,18 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserStats, Strategy, UserSettings } from '../types';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
-import { TrendingUp, Activity, DollarSign, Target, Calendar, Filter, Zap, Globe, ShieldAlert, Clock } from 'lucide-react';
+import { TrendingUp, Activity, DollarSign, Target, Calendar, Filter, Zap, Globe, ShieldAlert, Clock, RefreshCw, PlusCircle } from 'lucide-react';
 import { subDays, isAfter, startOfDay, endOfDay, startOfWeek, endOfWeek, format, isBefore, subMinutes, addMinutes } from 'date-fns';
 import { GoogleGenAI, Type } from "@google/genai";
 import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '../services/aiService';
 
-export default function Dashboard({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode: boolean; onOpenTradeForm?: () => void }) {
+  const { activeAccount, selectedAccountId } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [trades, setTrades] = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Map<string, string>>(new Map());
   const [timeFilter, setTimeFilter] = useState<'30d' | '90d' | 'all'>('30d');
@@ -20,7 +26,12 @@ export default function Dashboard({ userId }: { userId: string }) {
   const [isBriefingLoading, setIsBriefingLoading] = useState(false);
 
   useEffect(() => {
-    const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const strategiesQuery = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+      where('isDemo', '==', isDemoMode)
+    );
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, (doc.data() as Strategy).name));
@@ -29,7 +40,7 @@ export default function Dashboard({ userId }: { userId: string }) {
       handleFirestoreError(error, OperationType.LIST, 'strategies');
     });
 
-    const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
+    const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) {
         setSettings(snapshot.docs[0].data() as UserSettings);
@@ -53,49 +64,14 @@ export default function Dashboard({ userId }: { userId: string }) {
     });
 
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
-      orderBy('entryTime', 'desc')
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
+      orderBy('entryTime', 'desc'),
+      limit(50)
     );
 
     const unsubscribeTrades = onSnapshot(tradesQuery, async (snapshot) => {
       const tradesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade));
-      
-      if (tradesData.length === 0) {
-        // Auto-seeding: 30 days of realistic trades
-        const seedTrades = async () => {
-          const pairs = ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'AAPL', 'TSLA'];
-          const now = new Date();
-          for (let i = 0; i < 30; i++) {
-            const date = subDays(now, i);
-            const numTrades = Math.floor(Math.random() * 3) + 1;
-            for (let j = 0; j < numTrades; j++) {
-              const pair = pairs[Math.floor(Math.random() * pairs.length)];
-              const direction = Math.random() > 0.5 ? 'LONG' : 'SHORT';
-              const entry = Math.random() * 50000 + 100;
-              const win = Math.random() > 0.4;
-              const pnl = win ? Math.random() * 1000 + 100 : -(Math.random() * 500 + 50);
-              const exit = direction === 'LONG' ? entry + (pnl / 10) : entry - (pnl / 10);
-              
-              await addDoc(collection(db, 'trades'), {
-                userId,
-                symbol: pair,
-                entryPrice: entry,
-                exitPrice: exit,
-                quantity: 1,
-                direction,
-                status: 'CLOSED',
-                pnl,
-                entryTime: date.toISOString(),
-                exitTime: date.toISOString(),
-                notes: win ? 'Followed plan, good execution.' : 'Slightly early entry, but stuck to SL.',
-              });
-            }
-          }
-        };
-        seedTrades();
-      }
-      
       setTrades(tradesData);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'trades');
@@ -106,7 +82,7 @@ export default function Dashboard({ userId }: { userId: string }) {
       unsubscribeSettings();
       unsubscribeTrades();
     };
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   const filteredTrades = useMemo(() => {
     const now = new Date();
@@ -130,7 +106,7 @@ export default function Dashboard({ userId }: { userId: string }) {
     
     const totalWinAmount = wins.reduce((acc, t) => acc + (t.pnl || 0), 0);
     const totalLossAmount = Math.abs(losses.reduce((acc, t) => acc + (t.pnl || 0), 0));
-    const profitFactor = totalLossAmount === 0 ? (totalWinAmount > 0 ? 10 : 0) : totalWinAmount / totalLossAmount;
+    const profitFactor = totalLossAmount === 0 ? (totalWinAmount > 0 ? totalWinAmount : 0) : totalWinAmount / totalLossAmount;
 
     const avgWin = wins.length > 0 ? totalWinAmount / wins.length : 0;
     const avgLoss = losses.length > 0 ? totalLossAmount / losses.length : 0;
@@ -207,6 +183,18 @@ export default function Dashboard({ userId }: { userId: string }) {
     };
   }, [filteredTrades]);
 
+  // AI Global Context Heartbeat - Dashboard Stats
+  useEffect(() => {
+    if (stats.totalTrades > 0) {
+      window.dispatchEvent(new CustomEvent('nexus-global-context', {
+        detail: {
+          source: 'Live Dashboard Stats',
+          data: `Current ${timeFilter} stats: Total Profit ${formatCurrency(stats.totalProfit)}, Win Rate ${formatPercent(stats.winRate)}, Profit Factor ${stats.profitFactor.toFixed(2)}, Total Trades ${stats.totalTrades}, Max Drawdown ${formatCurrency(stats.maxDD)}.`
+        }
+      }));
+    }
+  }, [stats, timeFilter]);
+
   const cards = [
     { label: 'Total Profit', value: formatCurrency(stats.totalProfit), icon: DollarSign, color: 'text-emerald-500', bg: 'bg-emerald-500/10', sub: `${stats.totalTrades} trades` },
     { label: 'Win Rate', value: formatPercent(stats.winRate), icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10', sub: `${(stats.winRate * 100).toFixed(1)}% accuracy` },
@@ -218,7 +206,7 @@ export default function Dashboard({ userId }: { userId: string }) {
     const fetchDashboardData = async () => {
       if (stats.totalTrades === 0) return;
 
-      const cacheKey = `dashboard_data_${userId}`;
+      const cacheKey = `dashboard_data_${userId}_${isDemoMode ? 'demo' : 'real'}`;
       const cached = getCache(cacheKey);
       const contextHash = `${stats.totalTrades}_${timeFilter}`;
 
@@ -280,11 +268,12 @@ export default function Dashboard({ userId }: { userId: string }) {
         });
 
         const data = JSON.parse(response.text);
-        setUpcomingEvents(data.events);
-        setAiBriefing(data.briefing);
+        setUpcomingEvents(data.events || []);
+        setAiBriefing(data.briefing || "Ready for another profitable session? Stick to your plan!");
         setCache(cacheKey, data, contextHash);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
+        setAiBriefing("AI Briefing unavailable. High-impact news may be volatile today—trade safe.");
       } finally {
         setLoadingEvents(false);
         setIsBriefingLoading(false);
@@ -293,6 +282,95 @@ export default function Dashboard({ userId }: { userId: string }) {
 
     fetchDashboardData();
   }, [userId, stats.totalTrades, timeFilter]);
+
+  const handleSeedData = async () => {
+    if ((window as any).__isSeeding) return;
+    (window as any).__isSeeding = true;
+    setLoadingEvents(true); // Reuse loading state for UI feedback
+
+    const pairs = ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'AAPL', 'TSLA'];
+    const now = new Date();
+    try {
+      for (let i = 0; i < 30; i++) {
+        const date = subDays(now, i);
+        const numTrades = Math.floor(Math.random() * 3) + 1;
+        for (let j = 0; j < numTrades; j++) {
+          const pair = pairs[Math.floor(Math.random() * pairs.length)];
+          const direction = Math.random() > 0.5 ? 'LONG' : 'SHORT';
+          const entry = Math.random() * 50000 + 100;
+          const win = Math.random() > 0.4;
+          const pnl = win ? Math.random() * 1000 + 100 : -(Math.random() * 500 + 50);
+          const exit = direction === 'LONG' ? entry + (pnl / 10) : entry - (pnl / 10);
+          
+          await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
+            userId,
+            accountId,
+            symbol: pair,
+            entryPrice: entry,
+            exitPrice: exit,
+            quantity: 1,
+            direction,
+            status: 'CLOSED',
+            pnl,
+            entryTime: date.toISOString(),
+            exitTime: date.toISOString(),
+            notes: win ? 'Followed plan, good execution.' : 'Slightly early entry, but stuck to SL.',
+            isDemo: true
+          });
+        }
+      }
+      alert('Sample trades generated successfully!');
+    } catch (error) {
+      console.error('Seeding error:', error);
+      alert('Failed to generate sample data.');
+    } finally {
+      (window as any).__isSeeding = false;
+      setLoadingEvents(false);
+    }
+  };
+
+  if (trades.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 animate-in fade-in duration-700">
+        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-emerald-500/10 text-emerald-500">
+          <TrendingUp size={40} />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h2 className="text-2xl font-bold tracking-tight">
+            {isDemoMode ? "No Demo Data Found" : "Welcome to TradeFlow"}
+          </h2>
+          <p className="text-zinc-400">
+            {isDemoMode 
+              ? "You haven't generated any sample data yet. Click below to populate your dashboard with realistic trades."
+              : "Your trading journal is currently empty. Start by logging your first trade or explore the platform with sample data by switching to Demo Mode."}
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-4">
+          {isDemoMode ? (
+            <button
+              onClick={handleSeedData}
+              disabled={loadingEvents}
+              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-3 text-sm font-bold text-zinc-100 transition-all hover:bg-zinc-800 active:scale-95 disabled:opacity-50"
+            >
+              {loadingEvents ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap size={18} className="text-emerald-500" />}
+              Generate Sample Data
+            </button>
+          ) : (
+            <button
+              onClick={onOpenTradeForm}
+              className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-6 py-3 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-95"
+            >
+              <PlusCircle size={18} />
+              Log First Trade
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
+          {isDemoMode ? "Demo data is isolated from your real journal" : `All data is securely tied to your account: ${userId}`}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

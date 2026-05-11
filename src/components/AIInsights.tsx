@@ -1,16 +1,23 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { collection, query, where, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserSettings } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
 import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '../services/aiService';
-import { Brain, Sparkles, AlertTriangle, Lightbulb, RefreshCw, TrendingUp, TrendingDown, MessageSquare, Target, BarChart3, Fingerprint } from 'lucide-react';
+import { Brain, Sparkles, AlertTriangle, Lightbulb, RefreshCw, TrendingUp, TrendingDown, MessageSquare, Target, BarChart3, Fingerprint, Send } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '../lib/utils';
 
 type AnalysisMode = 'GENERAL' | 'TRADE' | 'PERFORMANCE' | 'PATTERN' | 'STRATEGY';
 
-export default function AIInsights({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function AIInsights() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState<Record<string, string>>({});
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -21,14 +28,19 @@ export default function AIInsights({ userId }: { userId: string }) {
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
 
   useEffect(() => {
-    const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
+    if (!userId || !accountId) return;
+
+    const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) setSettings(snapshot.docs[0].data() as UserSettings);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'settings');
     });
 
-    const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
+    const strategiesQuery = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+      where('isDemo', '==', isDemoMode)
+    );
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, doc.data().name));
@@ -38,8 +50,8 @@ export default function AIInsights({ userId }: { userId: string }) {
     });
 
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       where('status', '==', 'CLOSED'),
       orderBy('entryTime', 'desc'),
       limit(50)
@@ -56,7 +68,21 @@ export default function AIInsights({ userId }: { userId: string }) {
       unsubscribeStrategies();
       unsubscribeTrades();
     };
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
+
+  useEffect(() => {
+    if (insights[mode]) {
+      const timer = setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('nexus-global-context', {
+          detail: {
+            source: `AI Insights (${mode})`,
+            data: `Currently viewing AI analysis for ${mode}: ${insights[mode].substring(0, 300)}...`
+          }
+        }));
+      }, 1000); // Debounce context updates
+      return () => clearTimeout(timer);
+    }
+  }, [insights, mode]);
 
   const generateInsights = async (force = false) => {
     if (trades.length === 0) {
@@ -87,22 +113,27 @@ export default function AIInsights({ userId }: { userId: string }) {
       };
 
       const prompt = `
-        As a world-class trading performance analyst and coach, provide a comprehensive analysis of the following trade data across 5 distinct perspectives.
+        As a world-class trading performance analyst and senior hedge fund coach, provide a deep, data-driven audit of the following trade history. Your goal is to identify specific behavioral leaks, technical flaws, and optimization opportunities.
         
-        Trade Data Summary:
+        Trade Data Summary (Last 50 trades):
         Winning Trades:
         ${winningTrades.map(formatTrade).join('\n')}
         Losing Trades:
         ${losingTrades.map(formatTrade).join('\n')}
         
-        Please provide 5 distinct analyses:
-        1. GENERAL: Overall performance briefing, win rate, profit factor, and edge.
-        2. TRADE: Critique of execution quality, risk adherence, and psychological biases in recent trades.
-        3. PERFORMANCE: Statistical commonalities in wins vs losses, R/R profile, and behavioral consistency.
-        4. PATTERN: Detection of cognitive biases (FOMO, revenge trading), directional bias, and risk consistency.
-        5. STRATEGY: Optimization audit, ranking strategies, identifying "leaks", and scaling refinements.
+        Please provide 5 distinct, highly actionable analyses:
         
-        Return as a JSON object where keys are the modes (GENERAL, TRADE, PERFORMANCE, PATTERN, STRATEGY) and values are Markdown strings.
+        1. **GENERAL**: Provide a "State of the Journal" executive summary. Calculate the actual win rate and profit factor from the provided data. Identify the primary "Edge" (e.g., "High RR on XAUUSD shorts").
+        
+        2. **TRADE**: Critique the execution quality. Look for signs of "Note Quality" (are notes descriptive or emotional?). Identify if the user is holding losers too long or cutting winners early based on the PnL distribution.
+        
+        3. **PERFORMANCE**: Statistical deep-dive. Compare the average win vs average loss. Identify the "Best Performing Strategy" and "Worst Performing Strategy". Highlight any specific symbols or directions (Long/Short) that are draining the account.
+        
+        4. **PATTERN**: Detection of cognitive and behavioral biases. Look for "Revenge Trading" (clusters of losses in a short time), "FOMO" (entries with poor rationale), or "Risk Creep" (increasing quantity after losses).
+        
+        5. **STRATEGY**: Optimization audit. For each strategy identified, provide one specific technical refinement (e.g., "Tighten stops on Breakout trades by 10%"). Identify which strategy should be "Scaled" and which should be "Benched".
+        
+        Return as a JSON object where keys are the modes (GENERAL, TRADE, PERFORMANCE, PATTERN, STRATEGY) and values are professional Markdown strings with clear headings and bullet points.
       `;
 
       const response = await generateContent({
@@ -233,33 +264,71 @@ export default function AIInsights({ userId }: { userId: string }) {
                   <div className="prose prose-invert prose-sm max-w-none">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
+                  {msg.role === 'assistant' && i === chatHistory.length - 1 && !loading && (
+                    <button
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent('nexus-chat-context', {
+                          detail: {
+                            message: "Can you help me understand this insight better?",
+                            context: `
+                              Active Analysis Mode: ${mode}
+                              Recent Data Context: ${trades.length} trades analyzed.
+                              Insight content: ${msg.content}
+                            `.trim()
+                          }
+                        }));
+                      }}
+                      className="mt-4 flex items-center gap-2 self-end rounded-lg bg-zinc-950 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400 border border-white/5 hover:bg-zinc-900 transition-all group"
+                    >
+                      <Sparkles size={10} className="text-emerald-500 group-hover:scale-125 transition-transform" />
+                      Discuss with Nexus
+                    </button>
+                  )}
                 </div>
               ))}
 
               {loading && (
-                <div className="mr-auto bg-zinc-800/50 border border-zinc-700/50 rounded-2xl p-4 flex items-center gap-3">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" />
-                  <span className="text-xs text-zinc-400">Thinking...</span>
+                <div className="mr-auto">
+                  <div className="flex h-10 w-14 items-center justify-center gap-1 rounded-[1.5rem] bg-zinc-900 border border-white/5 shadow-sm">
+                    <motion.span 
+                      animate={{ scale: [1, 1.5, 1] }}
+                      transition={{ duration: 1, repeat: Infinity, delay: 0 }}
+                      className="h-1.5 w-1.5 rounded-full bg-indigo-500" 
+                    />
+                    <motion.span 
+                      animate={{ scale: [1, 1.5, 1] }}
+                      transition={{ duration: 1, repeat: Infinity, delay: 0.2 }}
+                      className="h-1.5 w-1.5 rounded-full bg-emerald-500" 
+                    />
+                    <motion.span 
+                      animate={{ scale: [1, 1.5, 1] }}
+                      transition={{ duration: 1, repeat: Infinity, delay: 0.4 }}
+                      className="h-1.5 w-1.5 rounded-full bg-cyan-500" 
+                    />
+                  </div>
                 </div>
               )}
             </div>
 
-            <form onSubmit={handleChat} className="relative">
-              <input
-                type="text"
-                placeholder="Ask me anything about your trading..."
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 pr-12 text-sm focus:border-purple-500 focus:outline-none transition-all"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                disabled={loading}
-              />
-              <button 
-                type="submit"
-                disabled={loading || !chatInput.trim()}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-purple-500 p-2 text-white transition-all hover:bg-purple-400 disabled:opacity-50"
-              >
-                <RefreshCw size={16} className={cn(loading && "animate-spin")} />
-              </button>
+            <form onSubmit={handleChat} className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 via-emerald-500 to-cyan-500 rounded-2xl blur opacity-20 group-focus-within:opacity-40 transition duration-500" />
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Ask me anything about your trading..."
+                  className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-6 py-4 pr-12 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-0 transition-all font-medium"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={loading}
+                />
+                <button 
+                  type="submit"
+                  disabled={loading || !chatInput.trim()}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl bg-white p-2 text-zinc-950 transition-all hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
             </form>
           </div>
         </div>

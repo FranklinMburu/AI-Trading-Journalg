@@ -7,7 +7,13 @@ import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '..
 import { CheckCircle, AlertTriangle, Brain, ShieldCheck, Info, RefreshCw, MessageSquare, Target, Globe } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export default function PreFlightChecklist({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function PreFlightChecklist() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [trades, setTrades] = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [tradeDesc, setTradeDesc] = useState('');
@@ -17,9 +23,11 @@ export default function PreFlightChecklist({ userId }: { userId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!userId || !accountId) return;
+
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       where('status', '==', 'CLOSED'),
       orderBy('exitTime', 'desc'),
       limit(10)
@@ -31,7 +39,10 @@ export default function PreFlightChecklist({ userId }: { userId: string }) {
       handleFirestoreError(error, OperationType.LIST, 'trades');
     });
 
-    const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
+    const strategiesQuery = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+      where('isDemo', '==', isDemoMode)
+    );
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       setStrategies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Strategy)));
     }, (error) => {
@@ -42,7 +53,7 @@ export default function PreFlightChecklist({ userId }: { userId: string }) {
       unsubscribeTrades();
       unsubscribeStrategies();
     };
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   const analyzeTrade = async () => {
     if (!tradeDesc.trim()) return;

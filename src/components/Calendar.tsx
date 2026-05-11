@@ -18,15 +18,23 @@ import {
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, TrendingUp, TrendingDown } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 
-export default function Calendar({ userId }: { userId: string }) {
+import { useAccount } from '../contexts/AccountContext';
+
+export default function Calendar() {
+  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [currentDate, setCurrentDate] = useState(new Date());
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!userId || !accountId) return;
+
     const q = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
       where('status', '==', 'CLOSED')
     );
 
@@ -38,7 +46,7 @@ export default function Calendar({ userId }: { userId: string }) {
     });
 
     return () => unsubscribe();
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(monthStart);

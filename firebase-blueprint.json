@@ -6,6 +6,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
+        "accountId": { "type": "string" },
         "symbol": { "type": "string" },
         "entryPrice": { "type": "number" },
         "exitPrice": { "type": "number" },
@@ -17,7 +18,8 @@
         "exitTime": { "type": "string", "format": "date-time" },
         "notes": { "type": "string" },
         "strategyId": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } }
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "isDemo": { "type": "boolean" }
       },
       "required": ["userId", "symbol", "entryPrice", "quantity", "direction", "status", "entryTime"]
     },
@@ -27,11 +29,13 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
+        "accountId": { "type": "string" },
         "tradeId": { "type": "string" },
         "content": { "type": "string" },
         "timestamp": { "type": "string", "format": "date-time" },
         "mood": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } }
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "isDemo": { "type": "boolean" }
       },
       "required": ["userId", "content", "timestamp"]
     },
@@ -44,7 +48,8 @@
         "name": { "type": "string" },
         "description": { "type": "string" },
         "rules": { "type": "string" },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "isDemo": { "type": "boolean" }
       },
       "required": ["userId", "name"]
     },
@@ -104,32 +109,74 @@
         "lastLogin": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role", "createdAt"]
+    },
+    "TradingAccount": {
+      "title": "Trading Account",
+      "description": "A specific trading account (MT4/MT5).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "name": { "type": "string" },
+        "broker": { "type": "string" },
+        "currency": { "type": "string" },
+        "balance": { "type": "number" },
+        "equity": { "type": "number" },
+        "type": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastUpdate": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "accountNumber", "currency"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "A single persistent AI chat message.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "content", "timestamp"]
     }
   },
   "firestore": {
-    "/trades/{tradeId}": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": "TradingAccount",
+      "description": "Collection of user trading accounts."
+    },
+    "/users/{userId}/accounts/{accountId}/trades/{tradeId}": {
       "schema": "Trade",
       "description": "Collection of user trades."
     },
-    "/journal_entries/{entryId}": {
+    "/users/{userId}/accounts/{accountId}/journal_entries/{entryId}": {
       "schema": "JournalEntry",
       "description": "Collection of journal entries."
     },
-    "/strategies/{strategyId}": {
+    "/users/{userId}/accounts/{accountId}/strategies/{strategyId}": {
       "schema": "Strategy",
       "description": "Collection of trading strategies."
+    },
+    "/users/{userId}/accounts/{accountId}/settings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "Account-specific settings and preferences."
+    },
+    "/users/{userId}/accounts/{accountId}/transactions/{transactionId}": {
+      "schema": "object",
+      "description": "Financial transactions for the account."
+    },
+    "/chat_history/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Persistent AI chat history for users."
     },
     "/user_stats/{userId}": {
       "schema": "UserStats",
       "description": "User performance statistics."
-    },
-    "/settings/{settingId}": {
-      "schema": "UserSettings",
-      "description": "User settings and preferences."
-    },
-    "/users/{userId}": {
-      "schema": "User",
-      "description": "User profiles and roles."
     }
   }
 }

@@ -1,119 +1,180 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
-    function isAuthenticated() {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Primitives ---
+    
+    function isSignedIn() {
       return request.auth != null;
     }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return isVerified() && request.auth.uid == userId;
     }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Admin logic - Only use email for initialization or if explicitly required
     function isAdmin() {
-      return isAuthenticated() &&
-        (
-          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-          ((request.auth.token.email == "franklinmburu05@gmail.com" || request.auth.token.email == "franklinvidal198@gmail.com") && request.auth.token.email_verified == true)
-        );
+      return isVerified() && (
+        request.auth.token.email == "franklinmburu05@gmail.com" || 
+        request.auth.token.email == "franklinvidal198@gmail.com" ||
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin'
+      );
     }
-    function isDocOwner() {
-      return isAuthenticated() && request.auth.uid == resource.data.userId;
-    }
+
+    // --- Entity Validation Blueprints ---
+
     function isValidUser(data) {
-      return data.email is string &&
-             data.role in ['admin', 'user'];
+      return data.email is string && data.email.size() <= 256 &&
+             data.role in ['admin', 'user'] &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128));
     }
-    function isValidTrade(data) {
-      return data.userId == request.auth.uid &&
-             data.symbol is string && data.symbol.size() > 0 && data.symbol.size() < 20 &&
-             data.entryPrice is number && data.entryPrice > 0 &&
-             data.quantity is number && data.quantity > 0 &&
+
+    function isValidAccount(data, userId) {
+      return data.userId == userId &&
+             data.accountNumber is string && data.accountNumber.size() <= 64 &&
+             data.currency is string && data.currency.size() <= 10 &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 128));
+    }
+
+    function isValidTrade(data, userId, accountId) {
+      return data.userId == userId &&
+             data.accountId == accountId &&
+             data.symbol is string && data.symbol.size() <= 20 &&
+             data.entryPrice is number &&
+             data.quantity is number &&
              data.direction in ['LONG', 'SHORT'] &&
              data.status in ['OPEN', 'CLOSED'] &&
-             data.entryTime is string &&
-             (!('exitPrice' in data) || data.exitPrice is number) &&
              (!('pnl' in data) || data.pnl is number) &&
-             (!('exitTime' in data) || data.exitTime is string) &&
-             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
-             (!('strategyId' in data) || data.strategyId is string) &&
-             (!('tags' in data) || data.tags is list) &&
-             (!('stopLoss' in data) || data.stopLoss is number) &&
-             (!('takeProfit' in data) || data.takeProfit is number);
+             (!('entryTime' in data) || data.entryTime is string) &&
+             (!('exitTime' in data) || data.exitTime is string);
     }
-    function isValidJournalEntry(data) {
-      return data.userId == request.auth.uid &&
-             data.content is string && data.content.size() > 0 && data.content.size() <= 10000 &&
-             data.timestamp is string &&
-             (!('tradeId' in data) || (data.tradeId == null || data.tradeId is string)) &&
+
+    function isValidJournalEntry(data, userId, accountId) {
+      return data.userId == userId &&
+             data.accountId == accountId &&
+             data.content is string && data.content.size() <= 10000 &&
              (!('mood' in data) || data.mood is string) &&
              (!('tags' in data) || data.tags is list);
     }
-    function isValidStrategy(data) {
-      return data.userId == request.auth.uid &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             (!('rules' in data) || (data.rules is string && data.rules.size() <= 10000)) &&
-             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
-             (!('createdAt' in data) || data.createdAt is string);
+
+    function isValidStrategy(data, userId, accountId) {
+      return data.userId == userId &&
+             data.name is string && data.name.size() <= 128 &&
+             (!('rules' in data) || data.rules is string);
     }
-    function isValidUserStats(data) {
-      return data.userId == request.auth.uid &&
-             (!('totalProfit' in data) || data.totalProfit is number) &&
-             (!('winRate' in data) || data.winRate is number) &&
-             (!('totalTrades' in data) || data.totalTrades is number) &&
-             (!('equityCurve' in data) || data.equityCurve is list);
-    }
-    function isValidUserSettings(data) {
-      return data.userId == request.auth.uid &&
+
+    function isValidSettings(data, userId) {
+      return data.userId == userId &&
              data.currency is string &&
              data.dailyGoal is number &&
-             data.weeklyGoal is number &&
-             data.notifications is map;
+             data.weeklyGoal is number;
     }
 
-    // Trades
-    match /trades/{tradeId} {
-      allow read: if isAuthenticated() && (isAdmin() || resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && isValidTrade(request.resource.data);
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidTrade(request.resource.data);
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
+    // --- Match Rules ---
+    
+    // Collection Group Rules for Admins
+    match /{path=**}/trades/{tradeId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/strategies/{strategyId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/accounts/{accountId} {
+      allow read: if isAdmin();
     }
 
-    // Journal Entries
-    match /journal_entries/{entryId} {
-      allow read: if isAuthenticated() && (isAdmin() || resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && isValidJournalEntry(request.resource.data);
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidJournalEntry(request.resource.data);
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
-    }
-
-    // Strategies
-    match /strategies/{strategyId} {
-      allow read: if isAuthenticated() && (isAdmin() || resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && isValidStrategy(request.resource.data);
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidStrategy(request.resource.data);
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
-    }
-
-    // User Stats
-    match /user_stats/{userId} {
-      allow read: if isOwner(userId);
-      allow write: if isOwner(userId) && isValidUserStats(request.resource.data);
-    }
-
-    // Settings
-    match /settings/{settingId} {
-      allow read: if isAuthenticated() && (isAdmin() || resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && isValidUserSettings(request.resource.data);
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid) && isValidUserSettings(request.resource.data);
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid);
-    }
-
-    // Users
+    // 1. Users Collection
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
-      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if (isOwner(userId) || isAdmin()) && 
+                    isValidUser(incoming()) && 
+                    (isAdmin() || incoming().role == existing().role);
       allow delete: if isAdmin();
+
+      // 2. Nested Accounts Collection (The Master Gate)
+      match /accounts/{accountId} {
+        allow get, list: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidId(accountId) && isValidAccount(incoming(), userId);
+        allow update: if isOwner(userId) && isValidAccount(incoming(), userId) && 
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'broker', 'balance', 'equity', 'lastUpdate']);
+        allow delete: if isOwner(userId);
+
+        // 3. Nested Account Resources
+        match /trades/{tradeId} {
+          allow list: if isOwner(userId) && resource.data.userId == userId; // Force query constraint
+          allow get: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidTrade(incoming(), userId, accountId);
+          allow update: if isOwner(userId) && isValidTrade(incoming(), userId, accountId) && (
+            // Action: Close Trade
+            (existing().status == 'OPEN' && incoming().status == 'CLOSED' && 
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'exitPrice', 'exitTime', 'pnl', 'notes'])) ||
+            // Action: Edit Notes/Tags
+            (incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'tags', 'strategyId']))
+          );
+          allow delete: if isOwner(userId);
+        }
+
+        match /journal_entries/{entryId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidJournalEntry(incoming(), userId, accountId);
+          allow update: if isOwner(userId) && isValidJournalEntry(incoming(), userId, accountId);
+          allow delete: if isOwner(userId);
+        }
+
+        match /strategies/{strategyId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidStrategy(incoming(), userId, accountId);
+          allow update: if isOwner(userId) && isValidStrategy(incoming(), userId, accountId);
+          allow delete: if isOwner(userId);
+        }
+
+        match /settings/{settingId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidSettings(incoming(), userId);
+          allow update: if isOwner(userId) && isValidSettings(incoming(), userId);
+          allow delete: if isOwner(userId);
+        }
+
+        match /transactions/{transactionId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId);
+          allow update, delete: if isAdmin();
+        }
+      }
+    }
+
+    // Global Collections (Legacy support or needed non-nested data)
+    match /user_stats/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId);
+    }
+
+    match /chat_history/{messageId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isVerified() && incoming().userId == request.auth.uid;
+      allow delete: if isOwner(resource.data.userId);
     }
   }
 }

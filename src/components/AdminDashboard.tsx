@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, getDocs, updateDoc, doc, where, orderBy, limit } from 'firebase/firestore';
+import { collection, collectionGroup, query, onSnapshot, getDocs, updateDoc, doc, where, orderBy, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Users, Shield, BarChart3, Activity, Search, UserPlus, UserMinus, Clock, TrendingUp } from 'lucide-react';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
@@ -22,7 +22,10 @@ interface SystemStats {
   activeUsers24h: number;
 }
 
+import { useAccount } from '../contexts/AccountContext';
+
 export default function AdminDashboard() {
+  const { isDemoMode } = useAccount();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [stats, setStats] = useState<SystemStats>({
     totalUsers: 0,
@@ -56,12 +59,17 @@ export default function AdminDashboard() {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
-    // Fetch total trades count (this might be expensive if there are many trades, 
-    // but for this app it's fine for now. In a real app we'd use a counter doc)
+    // Fetch total trades count via collectionGroup for admins
     const fetchCounts = async () => {
       try {
-        const tradesSnap = await getDocs(collection(db, 'trades'));
-        const strategiesSnap = await getDocs(collection(db, 'strategies'));
+        const tradesQuery = query(collectionGroup(db, 'trades'), where('isDemo', '==', isDemoMode));
+        const strategiesQuery = query(collectionGroup(db, 'strategies'), where('isDemo', '==', isDemoMode));
+        
+        const [tradesSnap, strategiesSnap] = await Promise.all([
+          getDocs(tradesQuery),
+          getDocs(strategiesQuery)
+        ]);
+
         setStats(prev => ({
           ...prev,
           totalTrades: tradesSnap.size,
@@ -74,7 +82,7 @@ export default function AdminDashboard() {
     fetchCounts();
 
     return () => unsubscribeUsers();
-  }, []);
+  }, [isDemoMode]);
 
   const toggleAdmin = async (user: UserProfile) => {
     const newRole = user.role === 'admin' ? 'user' : 'admin';

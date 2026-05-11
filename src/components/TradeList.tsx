@@ -1,35 +1,204 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc, getDocs, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc, getDocs, updateDoc, writeBatch, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, Strategy } from '../types';
-import { formatCurrency } from '../lib/utils';
+import { formatCurrency, calculateTradePnL } from '../lib/utils';
 import { Trash2, Calendar, Tag, History as HistoryIcon, Target, AlertTriangle, X as XIcon, Search, Filter, Download, CheckCircle2, BookOpen, RefreshCw, Shield } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserSettings } from '../types';
 
-export default function TradeList({ userId, onJournalTrade }: { userId: string, onJournalTrade?: (id: string) => void }) {
+// Memoized Trade Card for better performance
+const TradeCard = React.memo(({ 
+  trade, 
+  strategies, 
+  maxPnL, 
+  onCloseTrade, 
+  onJournalTrade, 
+  onDelete 
+}: { 
+  trade: Trade; 
+  strategies: Map<string, string>; 
+  maxPnL: number;
+  onCloseTrade: (t: Trade) => void;
+  onJournalTrade?: (id: string) => void;
+  onDelete: (id: string) => void;
+}) => {
+  return (
+    <motion.div 
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.2 }}
+      className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 transition-all hover:border-zinc-700 hover:bg-zinc-900"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3 sm:items-center sm:gap-4">
+          <div className={cn(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl font-bold sm:h-12 sm:w-12",
+            trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
+          )}>
+            {trade.symbol.slice(0, 2)}
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <h4 className="text-base font-bold sm:text-lg">{trade.symbol}</h4>
+              <span className={cn(
+                "rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider sm:text-[10px]",
+                trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
+              )}>
+                {trade.direction}
+              </span>
+              {trade.status === 'OPEN' && (
+                <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-500 sm:text-[10px]">
+                  OPEN
+                </span>
+              )}
+              {trade.accountId && (
+                <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[9px] font-bold tracking-wider text-zinc-400 sm:text-[10px]">
+                  #{trade.accountId}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 sm:text-xs">
+              <span className="flex items-center gap-1">
+                <Calendar size={10} className="sm:size-[12px]" />
+                {format(new Date(trade.entryTime), 'MMM d, HH:mm')}
+              </span>
+              {trade.tags && trade.tags.length > 0 && (
+                <span className="hidden items-center gap-1 sm:flex">
+                  <Tag size={12} />
+                  {trade.tags.join(', ')}
+                </span>
+              )}
+              {trade.strategyId && strategies.has(trade.strategyId) && (
+                <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-blue-500">
+                  <Target size={10} className="sm:size-[12px]" />
+                  {strategies.get(trade.strategyId)}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 border-t border-zinc-800/50 pt-4 sm:border-t-0 sm:pt-0 sm:justify-end sm:gap-6">
+          <div className="hidden lg:block w-32 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div 
+              className={cn(
+                "h-full rounded-full transition-all duration-500",
+                (trade.pnl || 0) >= 0 ? "bg-emerald-500" : "bg-rose-500"
+              )}
+              style={{ 
+                width: `${Math.min(100, (Math.abs(trade.pnl || 0) / Math.max(maxPnL, 1)) * 100)}%`,
+                marginLeft: (trade.pnl || 0) >= 0 ? '0' : 'auto'
+              }}
+            />
+          </div>
+          <div className="text-left sm:text-right min-w-[80px]">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider sm:text-[10px]">PnL</p>
+            <p className={cn(
+              "text-base font-bold sm:text-lg",
+              (trade.pnl || 0) > 0 ? "text-emerald-500" : (trade.pnl || 0) < 0 ? "text-rose-500" : "text-zinc-400"
+            )}>
+              {trade.pnl !== undefined ? formatCurrency(trade.pnl) : '-'}
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {trade.status === 'OPEN' && (
+              <button 
+                onClick={() => onCloseTrade(trade)}
+                className="rounded-lg bg-emerald-500/10 p-2 text-emerald-500 transition-all hover:bg-emerald-500 hover:text-zinc-950"
+                title="Close Trade"
+              >
+                <CheckCircle2 size={18} />
+              </button>
+            )}
+            {onJournalTrade && (
+              <button 
+                onClick={() => trade.id && onJournalTrade(trade.id)}
+                className="rounded-lg bg-zinc-800 p-2 text-zinc-400 transition-all hover:bg-emerald-500/10 hover:text-emerald-500"
+                title="Journal this trade"
+              >
+                <BookOpen size={18} />
+              </button>
+            )}
+            <button 
+              onClick={() => trade.id && onDelete(trade.id)}
+              className="rounded-lg p-2 text-zinc-500 transition-all hover:bg-rose-500/10 hover:text-rose-500 sm:opacity-0 sm:group-hover:opacity-100"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      {trade.notes && (
+        <div className="mt-4 border-t border-zinc-800 pt-4">
+          <p className="text-sm text-zinc-400 italic">"{trade.notes}"</p>
+        </div>
+      )}
+    </motion.div>
+  );
+});
+
+import { useAccount } from '../contexts/AccountContext';
+
+export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: boolean, onJournalTrade?: (id: string) => void }) {
+  const { activeAccount, selectedAccountId } = useAccount();
+  const userId = activeAccount?.userId;
+  const accountId = selectedAccountId;
+
   const [trades, setTrades] = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Map<string, string>>(new Map());
   const [tradeToDelete, setTradeToDelete] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [filterDirection, setFilterDirection] = useState<string>('ALL');
-  const [filterStatus, setFilterStatus] = useState<string>('ALL');
-  const [selectedPairs, setSelectedPairs] = useState<string[]>([]);
+  
+  // Persistence Key
+  const STORAGE_KEY = `trade_filters_${userId}_${isDemoMode ? 'demo' : 'real'}_${accountId || 'all'}`;
+
+  // Initialize filters from localStorage
+  const [search, setSearch] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved).search || '' : '';
+  });
+  const [filterDirection, setFilterDirection] = useState<string>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved).filterDirection || 'ALL' : 'ALL';
+  });
+  const [filterStatus, setFilterStatus] = useState<string>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved).filterStatus || 'ALL' : 'ALL';
+  });
+  const [selectedPairs, setSelectedPairs] = useState<string[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved).selectedPairs || [] : [];
+  });
+
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [syncing, setSyncing] = useState(false);
 
+  // Save filters to localStorage whenever they change
   useEffect(() => {
-    const settingsQuery = query(collection(db, 'settings'), where('userId', '==', userId));
+    const filters = { search, filterDirection, filterStatus, selectedPairs };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+  }, [search, filterDirection, filterStatus, selectedPairs, STORAGE_KEY]);
+
+  useEffect(() => {
+    if (!userId || !accountId) return;
+
+    const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
     const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) {
         setSettings(snapshot.docs[0].data() as UserSettings);
       }
     });
 
-    const strategiesQuery = query(collection(db, 'strategies'), where('userId', '==', userId));
+    const strategiesQuery = query(
+      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+      where('isDemo', '==', isDemoMode)
+    );
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, (doc.data() as Strategy).name));
@@ -39,9 +208,10 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
     });
 
     const tradesQuery = query(
-      collection(db, 'trades'),
-      where('userId', '==', userId),
-      orderBy('entryTime', 'desc')
+      collection(db, 'users', userId, 'accounts', accountId, 'trades'),
+      where('isDemo', '==', isDemoMode),
+      orderBy('entryTime', 'desc'),
+      limit(100)
     );
 
     const unsubscribeTrades = onSnapshot(tradesQuery, (snapshot) => {
@@ -55,7 +225,7 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
       unsubscribeTrades();
       unsubscribeSettings();
     };
-  }, [userId]);
+  }, [userId, accountId, isDemoMode]);
 
   const handleBrokerSync = async () => {
     if (!settings?.brokerConfig?.isActive || !settings.brokerConfig.metaApiToken || !settings.brokerConfig.accountId) {
@@ -90,9 +260,9 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
   };
 
   const handleDelete = async () => {
-    if (!tradeToDelete) return;
+    if (!tradeToDelete || !userId || !accountId) return;
     try {
-      await deleteDoc(doc(db, 'trades', tradeToDelete));
+      await deleteDoc(doc(db, 'users', userId, 'accounts', accountId, 'trades', tradeToDelete));
       setTradeToDelete(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'trades');
@@ -100,19 +270,17 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
   };
 
   const handleCloseTrade = async (trade: Trade) => {
-    if (!trade.id) return;
+    if (!trade.id || !userId || !accountId) return;
     const exitPrice = prompt('Enter exit price:');
     if (!exitPrice) return;
 
     const exit = parseFloat(exitPrice);
     if (isNaN(exit)) return;
 
-    const pnl = trade.direction === 'LONG' 
-      ? (exit - trade.entryPrice) * trade.quantity
-      : (trade.entryPrice - exit) * trade.quantity;
+    const pnl = calculateTradePnL(trade.entryPrice, exit, trade.quantity, trade.direction);
 
     try {
-      await updateDoc(doc(db, 'trades', trade.id), {
+      await updateDoc(doc(db, 'users', userId, 'accounts', accountId, 'trades', trade.id), {
         status: 'CLOSED',
         exitPrice: exit,
         exitTime: new Date().toISOString(),
@@ -125,7 +293,7 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
 
   const handleCloseAll = async () => {
     const openTrades = trades.filter(t => t.status === 'OPEN');
-    if (openTrades.length === 0) return;
+    if (openTrades.length === 0 || !userId || !accountId) return;
     
     const exitPrice = prompt(`Enter exit price for ALL ${openTrades.length} trades:`);
     if (!exitPrice) return;
@@ -135,11 +303,9 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
     const batch = writeBatch(db);
     openTrades.forEach(trade => {
       if (!trade.id) return;
-      const pnl = trade.direction === 'LONG' 
-        ? (exit - trade.entryPrice) * trade.quantity
-        : (trade.entryPrice - exit) * trade.quantity;
+      const pnl = calculateTradePnL(trade.entryPrice, exit, trade.quantity, trade.direction);
       
-      batch.update(doc(db, 'trades', trade.id), {
+      batch.update(doc(db, 'users', userId, 'accounts', accountId, 'trades', trade.id), {
         status: 'CLOSED',
         exitPrice: exit,
         exitTime: new Date().toISOString(),
@@ -155,11 +321,12 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
   };
 
   const exportToCSV = () => {
-    const headers = ['Symbol', 'Direction', 'Status', 'Entry Price', 'Exit Price', 'Quantity', 'PnL', 'Entry Time', 'Exit Time', 'Notes'];
-    const rows = trades.map(t => [
+    const headers = ['Symbol', 'Direction', 'Status', 'Account', 'Entry Price', 'Exit Price', 'Quantity', 'PnL', 'Entry Time', 'Exit Time', 'Notes'];
+    const rows = filteredTrades.map(t => [
       t.symbol,
       t.direction,
       t.status,
+      t.accountId || 'Manual',
       t.entryPrice,
       t.exitPrice || '',
       t.quantity,
@@ -181,17 +348,19 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
     document.body.removeChild(link);
   };
 
-  const filteredTrades = trades.filter(t => {
-    const matchesSearch = t.symbol.toLowerCase().includes(search.toLowerCase()) || 
-                         (t.notes?.toLowerCase().includes(search.toLowerCase()));
-    const matchesDirection = filterDirection === 'ALL' || t.direction === filterDirection;
-    const matchesStatus = filterStatus === 'ALL' || t.status === filterStatus;
-    const matchesPair = selectedPairs.length === 0 || selectedPairs.includes(t.symbol);
-    
-    return matchesSearch && matchesDirection && matchesStatus && matchesPair;
-  });
+  const filteredTrades = useMemo(() => {
+    return trades.filter(t => {
+      const matchesSearch = t.symbol.toLowerCase().includes(search.toLowerCase()) || 
+                           (t.notes?.toLowerCase().includes(search.toLowerCase()));
+      const matchesDirection = filterDirection === 'ALL' || t.direction === filterDirection;
+      const matchesStatus = filterStatus === 'ALL' || t.status === filterStatus;
+      const matchesPair = selectedPairs.length === 0 || selectedPairs.includes(t.symbol);
+      
+      return matchesSearch && matchesDirection && matchesStatus && matchesPair;
+    });
+  }, [trades, search, filterDirection, filterStatus, selectedPairs]);
 
-  const uniquePairs = Array.from(new Set(trades.map(t => t.symbol)));
+  const uniquePairs = useMemo(() => Array.from(new Set(trades.map(t => t.symbol))), [trades]);
 
   const filteredStats = useMemo(() => {
     const closed = filteredTrades.filter(t => t.status === 'CLOSED');
@@ -260,6 +429,18 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
           >
             <Download size={16} />
             Export
+          </button>
+          <button 
+            onClick={handleBrokerSync}
+            disabled={syncing}
+            className={cn(
+              "flex items-center gap-2 rounded-xl border border-zinc-800 px-4 py-2 text-sm font-medium transition-all hover:bg-zinc-800 disabled:opacity-50",
+              syncing && "text-emerald-500"
+            )}
+            title="Sync trades from MetaApi/Broker"
+          >
+            <RefreshCw size={16} className={cn(syncing && "animate-spin")} />
+            {syncing ? 'Syncing...' : 'Sync Broker'}
           </button>
           {trades.some(t => t.status === 'OPEN') && (
             <button 
@@ -362,115 +543,15 @@ export default function TradeList({ userId, onJournalTrade }: { userId: string, 
       <div className="grid gap-4">
         <AnimatePresence mode="popLayout">
           {filteredTrades.map((trade) => (
-            <motion.div 
-              layout
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              key={trade.id} 
-              className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 transition-all hover:border-zinc-700 hover:bg-zinc-900"
-            >
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-                  <div className={cn(
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl font-bold sm:h-12 sm:w-12",
-                    trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
-                  )}>
-                    {trade.symbol.slice(0, 2)}
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                      <h4 className="text-base font-bold sm:text-lg">{trade.symbol}</h4>
-                      <span className={cn(
-                        "rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider sm:text-[10px]",
-                        trade.direction === 'LONG' ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
-                      )}>
-                        {trade.direction}
-                      </span>
-                      {trade.status === 'OPEN' && (
-                        <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-500 sm:text-[10px]">
-                          OPEN
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 sm:text-xs">
-                      <span className="flex items-center gap-1">
-                        <Calendar size={10} className="sm:size-[12px]" />
-                        {format(new Date(trade.entryTime), 'MMM d, HH:mm')}
-                      </span>
-                      {trade.tags && trade.tags.length > 0 && (
-                        <span className="hidden items-center gap-1 sm:flex">
-                          <Tag size={12} />
-                          {trade.tags.join(', ')}
-                        </span>
-                      )}
-                      {trade.strategyId && strategies.has(trade.strategyId) && (
-                        <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-blue-500">
-                          <Target size={10} className="sm:size-[12px]" />
-                          {strategies.get(trade.strategyId)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between gap-4 border-t border-zinc-800/50 pt-4 sm:border-t-0 sm:pt-0 sm:justify-end sm:gap-6">
-                  <div className="hidden lg:block w-32 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                    <div 
-                      className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        (trade.pnl || 0) >= 0 ? "bg-emerald-500" : "bg-rose-500"
-                      )}
-                      style={{ 
-                        width: `${Math.min(100, (Math.abs(trade.pnl || 0) / filteredStats.maxPnL) * 100)}%`,
-                        marginLeft: (trade.pnl || 0) >= 0 ? '0' : 'auto'
-                      }}
-                    />
-                  </div>
-                  <div className="text-left sm:text-right min-w-[80px]">
-                    <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider sm:text-[10px]">PnL</p>
-                    <p className={cn(
-                      "text-base font-bold sm:text-lg",
-                      (trade.pnl || 0) > 0 ? "text-emerald-500" : (trade.pnl || 0) < 0 ? "text-rose-500" : "text-zinc-400"
-                    )}>
-                      {trade.pnl ? formatCurrency(trade.pnl) : '-'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {trade.status === 'OPEN' && (
-                      <button 
-                        onClick={() => handleCloseTrade(trade)}
-                        className="rounded-lg bg-emerald-500/10 p-2 text-emerald-500 transition-all hover:bg-emerald-500 hover:text-zinc-950"
-                        title="Close Trade"
-                      >
-                        <CheckCircle2 size={18} />
-                      </button>
-                    )}
-                    {onJournalTrade && (
-                      <button 
-                        onClick={() => trade.id && onJournalTrade(trade.id)}
-                        className="rounded-lg bg-zinc-800 p-2 text-zinc-400 transition-all hover:bg-emerald-500/10 hover:text-emerald-500"
-                        title="Journal this trade"
-                      >
-                        <BookOpen size={18} />
-                      </button>
-                    )}
-                    <button 
-                      onClick={() => trade.id && setTradeToDelete(trade.id)}
-                      className="rounded-lg p-2 text-zinc-500 transition-all hover:bg-rose-500/10 hover:text-rose-500 sm:opacity-0 sm:group-hover:opacity-100"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-              
-              {trade.notes && (
-                <div className="mt-4 border-t border-zinc-800 pt-4">
-                  <p className="text-sm text-zinc-400 italic">"{trade.notes}"</p>
-                </div>
-              )}
-            </motion.div>
+            <TradeCard 
+              key={trade.id}
+              trade={trade}
+              strategies={strategies}
+              maxPnL={filteredStats.maxPnL}
+              onCloseTrade={handleCloseTrade}
+              onJournalTrade={onJournalTrade}
+              onDelete={setTradeToDelete}
+            />
           ))}
         </AnimatePresence>
 

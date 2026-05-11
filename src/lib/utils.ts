@@ -22,3 +22,11 @@ export function formatCurrency(value: number) {
 export function formatPercent(value: number) {
   return percentFormatter.format(value);
 }
+
+export function calculateTradePnL(entry: number, exit: number, quantity: number, direction: 'LONG' | 'SHORT') {
+  if (direction === 'LONG') {
+    return (exit - entry) * quantity;
+  } else {
+    return (entry - exit) * quantity;
+  }
+}
