@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, deleteDoc, doc, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, deleteDoc, doc, where, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Database, Search, ChevronRight, ChevronDown, FileJson, RefreshCw, Download, Trash2, Copy, Check, Filter, Info, PlusCircle } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
@@ -17,7 +17,7 @@ export default function DataExplorer() {
   const userId = activeAccount?.userId;
   const accountId = selectedAccountId;
 
-  const [activeCollection, setActiveCollection] = useState<'trades' | 'strategies' | 'settings' | 'users'>('trades');
+  const [activeCollection, setActiveCollection] = useState<'trades' | 'strategies' | 'settings' | 'users' | 'webhooks' | 'accounts'>('trades');
   const [data, setData] = useState<CollectionData[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -26,7 +26,7 @@ export default function DataExplorer() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!userId || (!accountId && activeCollection !== 'users')) {
+    if (!userId || (!accountId && !['users', 'accounts', 'webhooks'].includes(activeCollection))) {
       setLoading(false);
       return;
     }
@@ -40,9 +40,17 @@ export default function DataExplorer() {
         return;
       }
       q = query(collection(db, 'users'));
+    } else if (activeCollection === 'accounts') {
+      q = query(collection(db, 'users', userId, 'accounts'), orderBy('lastUpdate', 'desc'));
+    } else if (activeCollection === 'webhooks') {
+      q = query(collection(db, 'users', userId, 'webhook_logs'), orderBy('timestamp', 'desc'), limit(50));
     } else {
       // Nested collections
-      const baseCol = collection(db, 'users', userId, 'accounts', accountId!, activeCollection);
+      if (!accountId) {
+        setLoading(false);
+        return;
+      }
+      const baseCol = collection(db, 'users', userId, 'accounts', accountId, activeCollection);
       if (activeCollection === 'trades' || activeCollection === 'strategies') {
          q = query(baseCol, where('isDemo', '==', isDemoMode));
       } else {
@@ -143,7 +151,9 @@ export default function DataExplorer() {
     { id: 'trades', label: 'Trades', count: activeCollection === 'trades' ? data.length : null },
     { id: 'strategies', label: 'Strategies', count: activeCollection === 'strategies' ? data.length : null },
     { id: 'settings', label: 'Settings', count: activeCollection === 'settings' ? data.length : null },
+    { id: 'accounts', label: 'Accounts', count: activeCollection === 'accounts' ? data.length : null },
     { id: 'users', label: 'Users', count: activeCollection === 'users' ? data.length : null },
+    { id: 'webhooks', label: 'Webhook Logs', count: activeCollection === 'webhooks' ? data.length : null },
   ].filter(col => col.id !== 'users' || isAdmin);
 
   const getDocSummary = (doc: any) => {
@@ -177,6 +187,22 @@ export default function DataExplorer() {
         );
       case 'settings':
         return <span className="text-zinc-400">Settings for {doc.userId}</span>;
+      case 'accounts':
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-300 font-medium">{doc.name || doc.accountNumber}</span>
+            <span className="text-zinc-500">[{doc.currency}]</span>
+            {doc.lastSync && <span className="text-[9px] text-emerald-500">Synced: {doc.lastSync}</span>}
+          </div>
+        );
+      case 'webhooks':
+        return (
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-blue-500">{doc.time?.split('T')[1]?.split('.')[0]}</span>
+            <span className="text-zinc-400">{doc.userParam}</span>
+            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] font-bold text-zinc-400">{doc.queryId || 'no-query-id'}</span>
+          </div>
+        );
       default:
         return null;
     }

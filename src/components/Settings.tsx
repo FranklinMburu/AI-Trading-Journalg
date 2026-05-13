@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch, deleteDoc, orderBy, setDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch, deleteDoc, orderBy, setDoc, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { UserSettings, TradingAccount } from '../types';
-import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, RefreshCw, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X, Lock, Key } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, RefreshCw, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X, Lock, Key, Activity, Clock, Zap, ShieldCheck } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth } from '../firebase';
+import { format } from 'date-fns';
 
 import { useAccount } from '../contexts/AccountContext';
 
 export default function Settings() {
   const { activeAccount, userAccounts, selectedAccountId, isDemoMode, user: contextUser } = useAccount();
-  const userId = contextUser?.uid || activeAccount?.userId;
+  const userId = contextUser?.uid;
   const accountId = selectedAccountId;
   
   const user = contextUser || auth.currentUser;
@@ -18,6 +19,22 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [webhookLogs, setWebhookLogs] = useState<any[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
+  useEffect(() => {
+    if (!userId) return;
+    setLoadingLogs(true);
+    const logsQuery = query(
+      collection(db, 'users', userId, 'webhook_logs'),
+      orderBy('timestamp', 'desc'),
+      limit(5)
+    );
+    return onSnapshot(logsQuery, (snapshot) => {
+      setWebhookLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoadingLogs(false);
+    }, () => setLoadingLogs(false));
+  }, [userId]);
   const [userSettings, setUserSettings] = useState<UserSettings>({
     userId: userId || '',
     currency: 'USD',
@@ -170,7 +187,7 @@ export default function Settings() {
 #property version   "1.20"
 #property strict
 
-input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || 'PLEASE_LOGIN'}";
+input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || ''}";
 input string Secret = ""; 
 input bool SyncHistoryOnStart = ${syncHistoryOnStart}; // Set to true to sync all past trades on first run
 
@@ -241,7 +258,7 @@ void SendTradeToJournal() {
 #property strict
 #property version "1.10"
 
-input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || 'PLEASE_LOGIN'}";
+input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || ''}";
 input string Secret = "";
 input bool SyncHistoryOnStart = ${syncHistoryOnStart}; // Set to true to sync all past trades on first run
 
@@ -252,26 +269,39 @@ int OnInit() {
    HistorySelect(0, TimeCurrent());
    int deals = HistoryDealsTotal();
    if(deals > 0) {
-      lastDealTicket = HistoryDealGetTicket(deals - 1);
+      ulong ticket = HistoryDealGetTicket(deals - 1);
+      if(ticket > 0) lastDealTicket = ticket;
       if(SyncHistoryOnStart) {
          Print("Syncing historical trades...");
-         for(int i = 0; i < deals; i++) SendTradeToJournal(HistoryDealGetTicket(i));
+         for(int i = 0; i < deals; i++) {
+            ulong t = HistoryDealGetTicket(i);
+            if(t > 0) SendTradeToJournal(t);
+         }
       }
    }
    return(INIT_SUCCEEDED);
 }
 
 void OnTick() {
-   HistorySelect(0, TimeCurrent());
+   if(!HistorySelect(0, TimeCurrent())) return;
    int deals = HistoryDealsTotal();
    if(deals <= 0) return;
+   
    ulong latestTicket = HistoryDealGetTicket(deals - 1);
-   if(latestTicket == lastDealTicket) return;
+   if(latestTicket <= 0 || latestTicket == lastDealTicket) return;
+   
    lastDealTicket = latestTicket;
    SendTradeToJournal(latestTicket);
 }
 
 void SendTradeToJournal(ulong ticket) {
+   if(ticket <= 0) return;
+   
+   if(!HistoryDealSelect(ticket)) {
+      Print("TradeFlow: Failed to select ticket ", ticket);
+      return;
+   }
+
    string symbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
    long type = HistoryDealGetInteger(ticket, DEAL_TYPE);
    if(type != DEAL_TYPE_BUY && type != DEAL_TYPE_SELL) return;
@@ -306,7 +336,7 @@ void SendTradeToJournal(ulong ticket) {
       }
    }
 
-   string json = StringFormat("{\\"ticket\\":\\"%d\\",\\"status\\":\\"%s\\",\\"isDemo\\":%s,\\"symbol\\":\\"%s\\",\\"direction\\":\\"%s\\",\\"entryPrice\\":%f,\\"exitPrice\\":%f,\\"pnl\\":%f,\\"quantity\\":%f,\\"entryTime\\":\\"%s\\"%s,\\"accountId\\":\\"%s\\"}",
+   string json = StringFormat("{\\"ticket\\":\\"%llu\\",\\"status\\":\\"%s\\",\\"isDemo\\":%s,\\"symbol\\":\\"%s\\",\\"direction\\":\\"%s\\",\\"entryPrice\\":%f,\\"exitPrice\\":%f,\\"pnl\\":%f,\\"quantity\\":%f,\\"entryTime\\":\\"%s\\"%s,\\"accountId\\":\\"%s\\"}",
       ticket, status, (isDemo?"true":"false"), symbol, direction, openPrice, entryPrice, pnl, volume, TimeToString(openTime, TIME_DATE|TIME_SECONDS), 
       (status == "CLOSED" ? ",\\"exitTime\\":\\"" + TimeToString(dealTime, TIME_DATE|TIME_SECONDS) + "\\"" : ""), accountNo);
    char post[], result[];
@@ -635,6 +665,17 @@ void SendTradeToJournal(ulong ticket) {
             <Globe size={20} />
             <h4 className="font-bold">Free Broker Sync (Webhook Method)</h4>
           </div>
+          
+          {!userId && (
+            <div className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-amber-500">
+              <AlertTriangle size={20} />
+              <div className="text-xs">
+                <p className="font-bold">Authentication Required</p>
+                <p className="opacity-80">You must be logged in to generate a valid sync script. Please refresh the page or sign in again.</p>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="space-y-4">
               <p className="text-xs text-zinc-400 leading-relaxed">
@@ -642,15 +683,19 @@ void SendTradeToJournal(ulong ticket) {
                 This uses a small script in your MetaTrader that pushes trades to your journal for free, 
                 automatically detecting your unique account number to prevent mixed data.
               </p>
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+              <div className={cn(
+                "rounded-xl border p-4 transition-all",
+                userId ? "border-emerald-500/20 bg-emerald-500/5" : "border-zinc-800 bg-zinc-900/50 opacity-50 grayscale pointer-events-none"
+              )}>
                 <p className="text-[10px] font-bold uppercase text-emerald-500 mb-1">Your Base Webhook URL:</p>
                 <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
                   <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
-                    {window.location.origin}/api/webhook/trade?userId={userId}{userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}
+                    {window.location.origin}/api/webhook/trade?userId={userId || 'auth_token_missing'}{userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}
                   </code>
                   <button 
+                    disabled={!userId}
                     onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}${userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}`)}
-                    className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500"
+                    className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500 disabled:opacity-30"
                   >
                     Copy
                   </button>
@@ -731,17 +776,21 @@ void SendTradeToJournal(ulong ticket) {
                 </div>
               </div>
               <button 
+                disabled={!userId}
                 onClick={() => {
                   navigator.clipboard.writeText(mtVersion === 'mt4' ? mt4Script : mt5Script);
                   alert(`${mtVersion.toUpperCase()} Script copied to clipboard!`);
                 }}
-                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-500"
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-500 disabled:opacity-50 disabled:grayscale"
               >
                 Copy {mtVersion.toUpperCase()} Script
               </button>
             </div>
             
-            <div className="relative group">
+            <div className={cn(
+              "relative group transition-all",
+              !userId && "opacity-20 blur-[2px] pointer-events-none"
+            )}>
               <pre 
                 className="max-h-64 overflow-y-auto rounded-xl bg-zinc-900/50 border border-zinc-800 p-4 text-[9px] text-zinc-400 font-mono leading-relaxed"
               >
@@ -780,6 +829,133 @@ void SendTradeToJournal(ulong ticket) {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Recent Webhook Activity diagnostic */}
+        <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2 shadow-inner">
+          <div className="flex items-center gap-2 mb-1">
+            <Activity size={20} className="text-emerald-500" />
+            <h4 className="font-bold">Recent Sync Activity</h4>
+            <button 
+              onClick={async () => {
+                try {
+                  const url = `${window.location.origin}/api/webhook/trade?userId=${userId}`;
+                  const res = await fetch(url);
+                  const data = await res.json();
+                  alert(`Connection Test ${data.status === 'LISTEN_ACTIVE' ? 'SUCCESS' : 'FAILED'}\nServer message: ${data.message}`);
+                } catch (e) {
+                  alert("Failed to reach server. Please check your internet connection.");
+                }
+              }}
+              className="ml-auto flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-[9px] font-bold text-emerald-500 hover:bg-emerald-500/20"
+            >
+              <Zap size={10} />
+              Test Server URL
+            </button>
+            <button 
+              onClick={async () => {
+                try {
+                  const url = `${window.location.origin}/api/debug/sync?userId=${userId}`;
+                  const res = await fetch(url);
+                  const data = await res.json();
+                  console.log("[Diagnostic Data]", data);
+                  
+                  if (data.error) {
+                    alert(`Diagnostic Error: ${data.error}\nCode: ${data.code}\n\nCheck browser console for more details.`);
+                    return;
+                  }
+
+                  const accountStats = data.accounts.map((a: any) => 
+                    `Account: ${a.id}\n- Trades: ${a.tradeCount}\n- Demo trades: ${a.trades.filter((t:any) => t.isDemo).length}\n- Real trades: ${a.trades.filter((t:any) => !t.isDemo).length}`
+                  ).join('\n\n');
+
+                  alert(`Diagnostic Complete\n\nAccounts Found: ${data.accountsFound}\nSelected ID: ${selectedAccountId}\nDashboard Mode: ${isDemoMode ? 'DEMO' : 'REAL'}\n\n${accountStats || 'No accounts found.'}`);
+                } catch (e) {
+                  alert("Diagnostic failed to reach server.");
+                }
+              }}
+              className="ml-2 flex items-center gap-1 rounded-lg bg-blue-500/10 px-2 py-1 text-[9px] font-bold text-blue-500 hover:bg-blue-500/20"
+            >
+              <Activity size={10} />
+              Diagnostic Sync
+            </button>
+            <button 
+              onClick={async () => {
+                try {
+                  const url = `${window.location.origin}/api/debug/test-write`;
+                  const res = await fetch(url);
+                  const data = await res.json();
+                  if (data.success) {
+                    alert("Admin SDK Write Test: SUCCESS\nPath: " + data.path);
+                  } else {
+                    alert("Admin SDK Write Test: FAILED\n" + data.error);
+                  }
+                } catch (e) {
+                  alert("Test write failed to reach server.");
+                }
+              }}
+              className="ml-2 flex items-center gap-1 rounded-lg bg-orange-500/10 px-2 py-1 text-[9px] font-bold text-orange-500 hover:bg-orange-500/20"
+            >
+              <Database size={10} />
+              Test Write
+            </button>
+            <button 
+              onClick={async () => {
+                try {
+                  const url = `${window.location.origin}/api/debug/auth-check`;
+                  const res = await fetch(url);
+                  const data = await res.json();
+                  if (data.success) {
+                    alert("Admin SDK Auth: SUCCESS\n" + data.message);
+                  } else {
+                    alert("Admin SDK Auth: FAILED\n" + data.error + "\n\n" + data.details);
+                  }
+                } catch (e) {
+                  alert("Auth check failed to reach server.");
+                }
+              }}
+              className="ml-2 flex items-center gap-1 rounded-lg bg-purple-500/10 px-2 py-1 text-[9px] font-bold text-purple-500 hover:bg-purple-500/20"
+            >
+              <ShieldCheck size={10} />
+              Auth Check
+            </button>
+          </div>
+          <p className="text-[10px] text-zinc-500 mb-4 px-1">
+            <b>Troubleshooting:</b> If "Recent Activity" is empty, ensure you have added <code>{window.location.origin}</code> to MT5 → Tools → Options → Expert Advisors → <b>Allow WebRequest</b>.
+          </p>
+          
+          <div className="space-y-2">
+            {webhookLogs.length > 0 ? (
+              webhookLogs.map((log) => (
+                <div key={log.id} className="flex items-center justify-between rounded-xl bg-zinc-950/80 p-3 border border-zinc-900 animate-in slide-in-from-right-4 duration-300">
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      log.status === 'SUCCESS' ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" : 
+                      log.status === 'PENDING' ? "bg-amber-500 animate-pulse" : "bg-rose-500"
+                    )} />
+                    <div>
+                      <p className="text-[10px] font-bold text-zinc-200">
+                         Request processed for account(s): {log.accountIds?.join(', ') || 'Unknown'}
+                      </p>
+                      <p className="text-[9px] text-zinc-500">
+                        {log.itemCount || log.payloadSize || 0} trade items received • Source: {log.clientIp || log.ip || 'Remote MT5'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-mono text-emerald-500/70">
+                    {log.timestamp ? format(new Date(log.timestamp), 'HH:mm:ss') : 'Just now'}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="flex flex-col items-center justify-center py-6 text-center rounded-xl bg-zinc-900/20 border border-dashed border-zinc-800">
+                <Clock size={24} className="text-zinc-700 mb-2" />
+                <p className="text-xs text-zinc-500">No sync activity detected in this session yet.</p>
+                <p className="text-[10px] text-zinc-600 mt-1 max-w-[200px]">Once you attach the EA in MT5 and a trade closes, it will appear here instantly.</p>
+              </div>
+            )}
           </div>
         </div>
 

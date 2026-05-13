@@ -3,8 +3,10 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import * as admin from "firebase-admin";
 import fs from "fs";
+import { initializeApp, getApps, cert, applicationDefault, App } from "firebase-admin/app";
+import { getFirestore, FieldValue, Firestore } from "firebase-admin/firestore";
+import { getAuth, Auth } from "firebase-admin/auth";
 
 console.log("Starting server script...");
 
@@ -12,43 +14,116 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-console.log("__dirname:", __dirname);
+const logBuffer: any[] = [];
 
 // Lazy Firebase Admin Initialization
-let db: admin.firestore.Firestore | null = null;
-let auth: admin.auth.Auth | null = null;
+let db: Firestore | null = null;
+let auth: Auth | null = null;
 
 function getFirebaseAdmin() {
-  console.log("Getting Firebase Admin instance...");
   if (!db) {
     try {
+      console.log("--- Firebase Admin Initialization Start ---");
       const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      console.log("Config path:", configPath);
-      if (!fs.existsSync(configPath)) {
-        throw new Error("firebase-applet-config.json not found");
+      
+      // Supported Service Account Paths
+      const rootPath = path.join(process.cwd(), "serviceAccount.json");
+      const serverDirPath = path.join(process.cwd(), "server", "serviceAccount.json");
+      
+      let firebaseConfig: any = {};
+      if (fs.existsSync(configPath)) {
+        console.log("Loading config from firebase-applet-config.json");
+        firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      } else {
+        console.log("firebase-applet-config.json not found, using environment variables");
+        firebaseConfig = {
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
+        };
       }
-      const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      console.log("Firebase config loaded for project:", firebaseConfig.projectId);
 
-      if (admin.apps.length === 0) {
-        console.log("Initializing Firebase Admin app...");
-        admin.initializeApp({
-          projectId: firebaseConfig.projectId,
+      const projectId = firebaseConfig.projectId;
+      const dbId = firebaseConfig.firestoreDatabaseId;
+
+      console.log("Target Project ID:", projectId || "NOT SPECIFIED");
+      console.log("Target Database ID:", dbId || "(default)");
+
+      const apps = getApps();
+      let app: App;
+
+      if (apps.length === 0) {
+        let cred;
+        
+        // 1. Check for Environment Variable
+        if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+          console.log("Using service account from FIREBASE_SERVICE_ACCOUNT env var.");
+          try {
+            cred = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
+          } catch (e: any) {
+            console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT env var:", e.message);
+          }
+        }
+        
+        // 2. Check for root file
+        if (!cred && fs.existsSync(rootPath)) {
+          console.log("Using serviceAccount.json from root.");
+          try {
+            cred = cert(JSON.parse(fs.readFileSync(rootPath, "utf-8")));
+          } catch (e: any) {
+            console.error("Failed to parse /serviceAccount.json:", e.message);
+          }
+        }
+
+        // 3. Check for /server/ subdirectory file
+        if (!cred && fs.existsSync(serverDirPath)) {
+          console.log("Using serviceAccount.json from /server/ directory.");
+          try {
+            cred = cert(JSON.parse(fs.readFileSync(serverDirPath, "utf-8")));
+          } catch (e: any) {
+            console.error("Failed to parse /server/serviceAccount.json:", e.message);
+          }
+        }
+
+        if (!cred) {
+          console.warn("No service account key found. Falling back to Application Default Credentials (ADC).");
+          console.warn("If PERMISSION_DENIED occurs, please upload a serviceAccount.json to the root.");
+          cred = applicationDefault();
+        }
+
+        app = initializeApp({
+          credential: cred,
+          projectId: projectId
         });
+        console.log("Admin app initialized.");
+      } else {
+        console.log("Retrieving existing Admin app instance.");
+        app = apps[0]!;
       }
       
-      const dbId = firebaseConfig.firestoreDatabaseId || "(default)";
-      console.log("Using Firestore Database ID:", dbId);
-      db = admin.firestore(dbId);
-      auth = admin.auth();
-      console.log("Firebase Admin initialized successfully");
-    } catch (error) {
-      console.error("Failed to initialize Firebase Admin:", error);
+      try {
+        if (dbId && dbId !== "(default)") {
+          console.log(`Targeting Firestore Database: ${dbId}`);
+          db = getFirestore(app, dbId);
+        } else {
+          console.log("Targeting (default) Firestore Database.");
+          db = getFirestore(app);
+        }
+        
+        auth = getAuth(app);
+        console.log("--- Firebase Admin Services Linked ---");
+      } catch (serviceErr: any) {
+        console.error("Failed to link Firestore or Auth services:", serviceErr.message);
+        throw serviceErr;
+      }
+
+    } catch (error: any) {
+      console.error("--- Firebase Admin SDK Initialization CRITICAL FAILURE ---");
+      console.error(`Reason: ${error.message}`);
+      if (error.stack) console.error(error.stack);
       throw error;
     }
   }
-  return { db, auth };
+  return { db: db!, auth: auth! };
 }
 
 async function startServer() {
@@ -63,119 +138,164 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // Broker Sync Endpoint (Placeholder for MetaApi or other integrations)
-  app.post("/api/broker/sync", async (req, res) => {
-    const { userId, metaApiToken, accountId } = req.body;
-    console.log(`Broker sync requested for user ${userId} on account ${accountId}`);
+  app.get("/api/debug-webhooks", (req, res) => {
+    res.json(logBuffer || []);
+  });
 
-    if (!userId || !metaApiToken || !accountId) {
-      return res.status(400).json({ error: "Missing required parameters for sync" });
-    }
-
+  // Auth Test Endpoint
+  app.get("/api/debug/auth-check", async (req, res) => {
     try {
-      // In a real implementation, this would call MetaApi or another broker API
-      // For now, we'll simulate a successful sync
+      const { auth } = getFirebaseAdmin();
+      // Try to create a custom token to verify if we have full admin permissions
+      const token = await auth.createCustomToken("server-diag-user");
       res.json({ 
         success: true, 
-        message: "Broker sync initiated. Trades will appear in your journal shortly.",
-        syncedCount: 0 
+        message: "Admin SDK has identity (can sign tokens)",
+        identity: "Service Account / ADC active"
       });
-    } catch (error) {
-      console.error("Broker sync error:", error);
-      res.status(500).json({ error: "Failed to connect to broker. Please check your credentials." });
+    } catch (e: any) {
+      console.error("[Auth Check Error]", e);
+      res.status(500).json({ 
+        success: false, 
+        error: e.message,
+        details: "This usually means the Admin SDK is initialized without enough permissions or credentials."
+      });
+    }
+  });
+
+  // Test write endpoint
+  app.get("/api/debug/test-write", async (req, res) => {
+    try {
+      const { db } = getFirebaseAdmin();
+      const testRef = db.collection("debug_tests").doc("last_test");
+      await testRef.set({ 
+        timestamp: new Date().toISOString(), 
+        message: "Server-side Admin SDK write test" 
+      });
+      res.json({ success: true, path: testRef.path });
+    } catch (e: any) {
+      console.error("[Test Write Error]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Diagnostic endpoint to check data sync
+  app.get("/api/debug/sync", async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    
+    try {
+      const { db } = getFirebaseAdmin();
+      const accounts: any[] = [];
+      const accountsRef = db.collection("users").doc(userId as string).collection("accounts");
+      const accSnapshot = await accountsRef.get();
+      
+      for (const accDoc of accSnapshot.docs) {
+        const tradesRef = accDoc.ref.collection("trades");
+        const tradesSnapshot = await tradesRef.get();
+        accounts.push({
+          id: accDoc.id,
+          data: accDoc.data(),
+          tradeCount: tradesSnapshot.size,
+          trades: tradesSnapshot.docs.slice(0, 5).map(t => ({ id: t.id, isDemo: t.data().isDemo }))
+        });
+      }
+
+      res.json({
+        userId,
+        accountsFound: accSnapshot.size,
+        accounts
+      });
+    } catch (e: any) {
+      console.error("[Debug Sync Error]", e);
+      res.status(500).json({ error: e.message });
     }
   });
 
   // Webhook Receiver for MT4/MT5
-  app.post("/api/webhook/trade", async (req, res) => {
-    console.log("Received webhook request:", req.query);
-    const { userId: idOrEmail, secret, accountId } = req.query;
-    const tradeData = req.body;
+  app.get("/api/webhook/trade", (req, res) => {
+    res.json({ 
+      status: "LISTEN_ACTIVE", 
+      message: "Sync pipeline is listening for MT5 POST requests (Admin SDK Mode).",
+      timestamp: new Date().toISOString()
+    });
+  });
 
-    if (!idOrEmail) {
-      return res.status(400).json({ error: "Missing userId parameter" });
+  app.post("/api/webhook/trade", async (req, res) => {
+    const { userId: idOrEmail, secret, accountId } = req.query;
+    console.log(`\n[WEBHOOK TRACE] ${new Date().toISOString()}`);
+    console.log(`[Webhook] UserParam: ${idOrEmail} | Admin SDK Mode`);
+    
+    const tradeData = req.body;
+    const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
+    
+    // Log to buffer for diagnostics
+    logBuffer.unshift({
+      time: new Date().toISOString(),
+      type: "WEBHOOK_EVENT",
+      userParam: idOrEmail,
+      queryId: accountId,
+      bodyPreview: dataToProcess.slice(0, 2).map(item => ({ ticket: item.ticket, symbol: item.symbol, account: item.accountId }))
+    });
+    if (logBuffer.length > 50) logBuffer.pop();
+
+    if (!idOrEmail || idOrEmail === 'PLEASE_LOGIN' || idOrEmail === 'undefined') {
+      return res.status(400).json({ error: "Missing or invalid userId parameter." });
     }
 
     try {
       const { db, auth } = getFirebaseAdmin();
-      if (!db || !auth) throw new Error("Firebase Admin not ready");
-
+      
       let uid: string;
       
-      // Check if it's an email or a UID
+      // Resolve email to UID if needed
       if ((idOrEmail as string).includes("@")) {
-        console.log("Looking up user by email:", idOrEmail);
+        console.log(`[Webhook] Resolving email: ${idOrEmail}`);
         const userRecord = await auth.getUserByEmail(idOrEmail as string);
         uid = userRecord.uid;
+        console.log(`[Webhook] Resolved to UID: ${uid}`);
       } else {
-        console.log("Looking up user by UID:", idOrEmail);
-        const userRecord = await auth.getUser(idOrEmail as string);
-        uid = userRecord.uid;
+        uid = idOrEmail as string;
       }
 
-      // --- WEBHOOK SECURITY CHECK ---
-      // Check for user-specific secret first, then fall back to environment secret
-      const globalWebhookSecret = process.env.WEBHOOK_SECRET;
-      
-      // Fetch user settings to check for a custom webhook secret
-      // We check all accounts for this user until we find one with a secret or use the default global one
-      let userTargetSecret = globalWebhookSecret;
-      
+      // Log to user-specific diagnostic collection
       try {
-        const targetAccountId = String(accountId || "DEFAULT");
-        const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
-        const settingsSnapshot = await db.collection("users").doc(uid)
-          .collection("accounts").doc(accountDocId)
-          .collection("settings").limit(1).get();
+        await db.collection("users").doc(uid).collection("webhook_logs").add({
+          timestamp: new Date().toISOString(),
+          accountIds: dataToProcess.map(item => String(accountId || item.accountId)),
+          itemCount: dataToProcess.length,
+          status: "SUCCESS",
+          clientIp: req.ip || req.headers['x-forwarded-for'] || "Unknown"
+        });
+      } catch (logErr) {
+        console.error("Failed to write webhook log to Firestore:", logErr);
+      }
+
+      const results = [];
+
+      for (const item of dataToProcess) {
+        console.log("[MT5 RAW ITEM]", JSON.stringify(item));
         
-        if (!settingsSnapshot.empty) {
-          const settings = settingsSnapshot.docs[0].data();
-          if (settings.webhookSecret) {
-            userTargetSecret = settings.webhookSecret;
-          }
+        // STRICT ACCOUNT RESOLUTION
+        if (!accountId && !item.accountId) {
+          console.error("[WEBHOOK REJECTED] Missing accountId in both query and body.");
+          continue;
         }
-      } catch (err) {
-        console.warn("Could not fetch user settings for secret check, falling back to global secret if set.");
-      }
 
-      if (userTargetSecret && secret !== userTargetSecret) {
-        console.warn(`Unauthorized webhook attempt for user ${uid} with invalid secret`);
-        return res.status(401).json({ error: "Unauthorized: Invalid webhook secret" });
-      }
+        const targetAccountId = String(accountId || item.accountId);
+        const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
 
-    const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
-    console.log(`[Webhook] User: ${idOrEmail}, Items: ${dataToProcess.length}, QueryUID: ${uid}`);
-
-    // Helper to sanitize date strings from MT5/MT4 (yyyy.mm.dd -> yyyy-mm-dd)
-    const sanitizeDate = (dateStr: any) => {
-      if (!dateStr || typeof dateStr !== "string") return new Date().toISOString();
-      try {
-        // Replace dots with hyphens for better JS parsing
-        const cleaned = dateStr.replace(/\./g, "-").replace(" ", "T");
-        const date = new Date(cleaned);
-        return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
-      } catch (e) {
-        return new Date().toISOString();
-      }
-    };
-
-    const results = [];
-    const accountRefs = new Map();
-
-    for (const item of dataToProcess) {
-      const targetAccountId = String(accountId || item.accountId || "DEFAULT");
-      const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
-      
-      let accountRef;
-      if (accountRefs.has(accountDocId)) {
-        accountRef = accountRefs.get(accountDocId);
-      } else {
-        console.log(`[Webhook] Syncing account ${accountDocId} for UID ${uid}`);
-        accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
+        console.log("[ACCOUNT RESOLUTION]", {
+          queryAccountId: accountId,
+          itemAccountId: item.accountId,
+          finalDocId: accountDocId
+        });
+        
+        const accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
         const accountDoc = await accountRef.get();
 
         if (!accountDoc.exists) {
-          console.log(`[Webhook] Creating account document for: ${targetAccountId}`);
+          console.log(`[Webhook] Creating account: ${accountDocId}`);
           await accountRef.set({
             userId: uid,
             accountNumber: targetAccountId,
@@ -184,113 +304,84 @@ async function startServer() {
             balance: item.balance || 0,
             equity: item.equity || 0,
             createdAt: new Date().toISOString(),
-            lastUpdate: new Date().toISOString()
+            lastUpdate: new Date().toISOString(),
+            lastSync: new Date().toISOString()
           });
         } else {
-          // Update balance/equity if provided
-          const updateData: any = { lastUpdate: new Date().toISOString() };
-          if (item.balance !== undefined) updateData.balance = item.balance;
-          if (item.equity !== undefined) updateData.equity = item.equity;
-          await accountRef.update(updateData);
-        }
-          // Mark last sync time
-          await accountRef.update({ lastSync: new Date().toISOString() });
-          accountRefs.set(accountDocId, accountRef);
+          await accountRef.update({
+            lastUpdate: new Date().toISOString(),
+            lastSync: new Date().toISOString(),
+            balance: item.balance ?? accountDoc.data()?.balance,
+            equity: item.equity ?? accountDoc.data()?.equity
+          });
         }
 
-        // Map incoming data to Trade schema
-        const trade: any = {
+        const isDemoFlag = String(item.isDemo).toLowerCase() === 'true' || item.isDemo === true;
+        const ticketId = item.ticket ? String(item.ticket) : `m_${Date.now()}`;
+
+        if (ticketId === "0") continue;
+
+        const tradeRef = accountRef.collection("trades").doc(ticketId);
+        const existingTrade = await tradeRef.get();
+        
+        const trade = {
           userId: uid,
-          accountId: targetAccountId,
-          symbol: item.symbol || "UNKNOWN",
-          entryPrice: parseFloat(item.entryPrice || item.price || 0),
-          exitPrice: parseFloat(item.exitPrice || item.price || 0),
-          quantity: parseFloat(item.quantity || 1),
+          accountId: accountDocId,
+          symbol: String(item.symbol || "UNKNOWN").toUpperCase(),
           direction: String(item.direction || "LONG").toUpperCase(),
           status: String(item.status || "CLOSED").toUpperCase(),
-          pnl: parseFloat(item.pnl || 0),
-          entryTime: sanitizeDate(item.entryTime),
-          exitTime: sanitizeDate(item.exitTime),
-          notes: item.notes || `Synced via Webhook`,
-          tags: item.tags || ["broker-sync"],
-          isDemo: String(item.isDemo).toLowerCase() === 'true' || item.isDemo === true 
+          entryPrice: Number(item.entryPrice || 0),
+          exitPrice: Number(item.exitPrice || 0),
+          pnl: Number(item.pnl || 0),
+          quantity: Number(item.quantity || 1),
+          entryTime: item.entryTime || new Date().toISOString(),
+          exitTime: item.exitTime || new Date().toISOString(),
+          isDemo: isDemoFlag,
+          updatedAt: FieldValue.serverTimestamp()
         };
 
-        if (item.ticket) trade.ticket = String(item.ticket);
-
-        // Add to Firestore using nested structure
-        // If we have a ticket, use it as the doc ID to prevent duplicates
-        if (item.ticket) {
-          const ticketId = `ticket_${String(item.ticket)}`;
-          const tradeRef = accountRef.collection("trades").doc(ticketId);
-          const existingTrade = await tradeRef.get();
-          
-          if (!existingTrade.exists) {
-            await tradeRef.set(trade);
-            results.push(ticketId);
-          } else {
-            // Update existing trade if it was open but now is closed
-            if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
-              await tradeRef.update(trade);
-              console.log(`Updated trade ${ticketId} to CLOSED status`);
-            }
-          }
-        } else {
-          const tradeAdded = await accountRef.collection("trades").add(trade);
-          results.push(tradeAdded.id);
+        if (!existingTrade.exists) {
+          console.log(`[Webhook] WRITING TRADE: ${ticketId}`);
+          await tradeRef.set(trade);
+          results.push(ticketId);
+        } else if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
+          console.log(`[Webhook] CLOSING TRADE: ${ticketId}`);
+          await tradeRef.update(trade);
+          results.push(ticketId);
         }
       }
       
-      console.log(`Batch process complete. Total trades synced: ${results.length}`);
-      
       res.json({ 
         success: true, 
-        message: `${results.length} trade(s) processed and synced to journal.`,
+        message: `${results.length} trade(s) synced.`,
         ids: results
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Webhook error:", error);
-      res.status(500).json({ error: "Failed to process webhook. Ensure user ID/email is correct and script is configured." });
+      res.status(500).json({ error: error.message });
     }
   });
 
-  // Vite middleware for development
+  // Vite setup
   if (process.env.NODE_ENV !== "production") {
-    console.log("Setting up Vite middleware...");
-    try {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
-      console.log("Vite middleware loaded");
-    } catch (error) {
-      console.error("Failed to load Vite middleware:", error);
-    }
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
   } else {
-    console.log("Running in production mode");
     const distPath = path.join(process.cwd(), 'dist');
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
       app.get('*', (req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
       });
-    } else {
-      console.warn("Production mode but dist/ directory not found. Serving health check only.");
     }
   }
 
-  console.log(`Attempting to listen on port ${PORT}...`);
-  if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
-  }
-  return app;
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
 }
 
-export const appPromise = startServer();
-
-appPromise.catch(err => {
-  console.error("Server failed to initialize:", err);
-});
+startServer();

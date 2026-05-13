@@ -128,6 +128,19 @@
       },
       "required": ["userId", "accountNumber", "currency"]
     },
+    "WebhookLog": {
+      "title": "Webhook Log",
+      "description": "A diagnostic log for incoming webhooks.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "accountIds": { "type": "array", "items": { "type": "string" } },
+        "itemCount": { "type": "number" },
+        "status": { "type": "string" },
+        "clientIp": { "type": "string" }
+      },
+      "required": ["timestamp", "itemCount", "status"]
+    },
     "ChatMessage": {
       "title": "Chat Message",
       "description": "A single persistent AI chat message.",
@@ -145,6 +158,10 @@
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles and roles."
+    },
+    "/users/{userId}/webhook_logs/{logId}": {
+      "schema": "WebhookLog",
+      "description": "Diagnostic logs for incoming terminal data."
     },
     "/users/{userId}/accounts/{accountId}": {
       "schema": "TradingAccount",

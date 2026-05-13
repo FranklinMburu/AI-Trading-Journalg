@@ -193,6 +193,8 @@ export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: 
       if (!snapshot.empty) {
         setSettings(snapshot.docs[0].data() as UserSettings);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'settings');
     });
 
     const strategiesQuery = query(

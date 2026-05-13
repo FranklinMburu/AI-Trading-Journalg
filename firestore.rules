@@ -36,9 +36,7 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         request.auth.token.email == "franklinmburu05@gmail.com" || 
-        request.auth.token.email == "franklinvidal198@gmail.com" ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+        request.auth.token.email == "franklinvidal198@gmail.com"
       );
     }
 
@@ -47,7 +45,10 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.email is string && data.email.size() <= 256 &&
              data.role in ['admin', 'user'] &&
-             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128));
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512)) &&
+             (!('createdAt' in data) || data.createdAt is string) &&
+             (!('lastLogin' in data) || data.lastLogin is string);
     }
 
     function isValidAccount(data, userId) {
@@ -91,6 +92,12 @@ service cloud.firestore {
              data.weeklyGoal is number;
     }
 
+    function isValidWebhookLog(data) {
+      return data.timestamp is string &&
+             data.itemCount is number &&
+             data.status is string;
+    }
+
     // --- Match Rules ---
     
     // Collection Group Rules for Admins
@@ -112,6 +119,12 @@ service cloud.firestore {
                     isValidUser(incoming()) && 
                     (isAdmin() || incoming().role == existing().role);
       allow delete: if isAdmin();
+
+      match /webhook_logs/{logId} {
+        allow get: if isOwner(userId) || isAdmin();
+        allow list: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidWebhookLog(incoming());
+      }
 
       // 2. Nested Accounts Collection (The Master Gate)
       match /accounts/{accountId} {
@@ -137,23 +150,20 @@ service cloud.firestore {
 
         match /journal_entries/{entryId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if (isOwner(userId) && isVerified()) && isValidJournalEntry(incoming(), userId, accountId);
-          allow update: if (isOwner(userId) && isVerified()) && isValidJournalEntry(incoming(), userId, accountId);
-          allow delete: if (isOwner(userId) && isVerified());
+          allow create, update: if isOwner(userId) && isValidJournalEntry(incoming(), userId, accountId);
+          allow delete: if isOwner(userId);
         }
 
         match /strategies/{strategyId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if (isOwner(userId) && isVerified()) && isValidStrategy(incoming(), userId, accountId);
-          allow update: if (isOwner(userId) && isVerified()) && isValidStrategy(incoming(), userId, accountId);
-          allow delete: if (isOwner(userId) && isVerified());
+          allow create, update: if isOwner(userId) && isValidStrategy(incoming(), userId, accountId);
+          allow delete: if isOwner(userId);
         }
 
         match /settings/{settingId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if (isOwner(userId) && isVerified()) && isValidSettings(incoming(), userId);
-          allow update: if (isOwner(userId) && isVerified()) && isValidSettings(incoming(), userId);
-          allow delete: if (isOwner(userId) && isVerified());
+          allow create, update: if isOwner(userId) && isValidSettings(incoming(), userId);
+          allow delete: if isOwner(userId);
         }
 
         match /transactions/{transactionId} {

@@ -71,6 +71,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  
+  // Only alert in development/preview to help debug permission issues
+  if ((import.meta as any).env.DEV || window.location.hostname.includes('ais-pre')) {
+     alert(`Firestore Error [${operationType}] at ${path}: ${errInfo.error}\n\nCheck console for details.`);
+  }
+  
   throw new Error(JSON.stringify(errInfo));
 }
 

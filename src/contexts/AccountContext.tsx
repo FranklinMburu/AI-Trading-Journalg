@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, getDocs, limit } from 'firebase/firestore';
 import { TradingAccount } from '../types';
 
 interface AccountContextType {
@@ -9,6 +9,7 @@ interface AccountContextType {
   accounts: TradingAccount[];
   userAccounts: TradingAccount[];
   activeAccount: TradingAccount | null;
+  accountsWithTrades: string[];
   selectedAccountId: string | null;
   setSelectedAccountId: (id: string | null) => void;
   isDemoMode: boolean;
@@ -75,6 +76,36 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  const [accountsWithTrades, setAccountsWithTrades] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!user || accounts.length === 0) {
+      setAccountsWithTrades([]);
+      return;
+    }
+
+    const checkTrades = async () => {
+      const activeIds: string[] = [];
+      for (const acc of accounts) {
+        try {
+          const q = query(collection(db, 'users', user.uid, 'accounts', acc.id, 'trades'), limit(1));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            activeIds.push(acc.id);
+          }
+        } catch (e) {
+          // Ignore errors for individual account checks (could be permission issues on specific docs)
+        }
+      }
+      setAccountsWithTrades(activeIds);
+    };
+
+    checkTrades();
+    // Re-check periodically or when accounts list changes
+    const interval = setInterval(checkTrades, 30000);
+    return () => clearInterval(interval);
+  }, [user, accounts.length]);
+
   useEffect(() => {
     if (!user) return;
 
@@ -87,12 +118,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       const accList = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradingAccount));
       setAccounts(accList);
       
-      // Use functional update to avoid stale closure on selectedAccountId
+      // Select the most appropriate account
       setSelectedAccountId(prev => {
-        if (!prev && accList.length > 0) {
-          const firstId = accList[0].id;
-          localStorage.setItem('tradeflow_selected_account', firstId);
-          return firstId;
+        console.log("[AccountContext] Available docs:", accList.map(a => a.id).join(', '));
+        // 1. If we have no selection PREVIOUSLY, or our previous selection is MISSING from accounts,
+        // or we are on a generic 'DEMO_001' and a real sync account just appeared:
+        const hasRealAccount = accList.some(a => a.accountNumber && !a.id.includes('DEMO'));
+        const currentIsGeneric = prev === 'DEMO_001' || !prev;
+        
+        if (accList.length > 0 && (currentIsGeneric || !accList.find(a => a.id === prev))) {
+          // If a real account exists and we're on demo/none, prefer the real one
+          const preferredAccount = accList.find(a => !a.id.includes('DEMO')) || accList[0];
+          localStorage.setItem('tradeflow_selected_account', preferredAccount.id);
+          return preferredAccount.id;
         }
         return prev;
       });
@@ -123,6 +161,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     accounts,
     userAccounts: accounts,
     activeAccount,
+    accountsWithTrades,
     selectedAccountId,
     setSelectedAccountId: handleSetSelectedAccountId,
     isDemoMode,
@@ -132,10 +171,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }), [
     user, 
     accounts, 
-    activeAccount, 
+    activeAccount,
+    accountsWithTrades,
     selectedAccountId, 
     handleSetSelectedAccountId, 
     isDemoMode, 
+    setIsDemoMode,
     isAdmin, 
     isLoading
   ]);

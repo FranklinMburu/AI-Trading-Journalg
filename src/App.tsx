@@ -75,7 +75,7 @@ const TabLoading = () => (
 import { useAccount } from './contexts/AccountContext';
 
 export default function App() {
-  const { user, isAdmin, isDemoMode, setIsDemoMode, activeAccount, selectedAccountId, setSelectedAccountId, accounts, isLoading } = useAccount();
+  const { user, isAdmin, isDemoMode, setIsDemoMode, activeAccount, selectedAccountId, setSelectedAccountId, accounts, accountsWithTrades, isLoading } = useAccount();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [isTradeFormOpen, setIsTradeFormOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -383,7 +383,10 @@ export default function App() {
             {/* Account Selector */}
             {accounts.length > 0 && (
               <div className="relative flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 transition-all hover:border-zinc-700">
-                <Database size={14} className="text-emerald-500" />
+                <Database size={14} className={cn(
+                   "transition-colors",
+                   accountsWithTrades.includes(selectedAccountId || '') ? "text-emerald-500" : "text-zinc-500"
+                )} />
                 <select 
                   value={selectedAccountId || ''} 
                   onChange={(e) => handleAccountChange(e.target.value)}
@@ -391,10 +394,17 @@ export default function App() {
                 >
                   {accounts.map(acc => (
                     <option key={acc.id} value={acc.id} className="bg-zinc-900 text-zinc-100">
-                      {acc.name} ({acc.currency})
+                      {acc.name} {accountsWithTrades.includes(acc.id) ? '•' : ''} ({acc.currency})
                     </option>
                   ))}
                 </select>
+
+                {/* Quick Warning if current account has no trades but others do */}
+                {(!selectedAccountId || !accountsWithTrades.includes(selectedAccountId)) && accountsWithTrades.length > 0 && (
+                   <div className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] text-zinc-950 animate-pulse border-2 border-zinc-950" title="Trades detected in other accounts!">
+                     !
+                   </div>
+                )}
               </div>
             )}
             

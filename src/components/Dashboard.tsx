@@ -4,7 +4,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserStats, Strategy, UserSettings } from '../types';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
-import { TrendingUp, Activity, DollarSign, Target, Calendar, Filter, Zap, Globe, ShieldAlert, Clock, RefreshCw, PlusCircle } from 'lucide-react';
+import { TrendingUp, Activity, DollarSign, Target, Calendar, Filter, Zap, Globe, ShieldAlert, Clock, RefreshCw, PlusCircle, Database, ChevronRight } from 'lucide-react';
 import { subDays, isAfter, startOfDay, endOfDay, startOfWeek, endOfWeek, format, isBefore, subMinutes, addMinutes } from 'date-fns';
 import { GoogleGenAI, Type } from "@google/genai";
 import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '../services/aiService';
@@ -12,11 +12,18 @@ import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '..
 import { useAccount } from '../contexts/AccountContext';
 
 export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode: boolean; onOpenTradeForm?: () => void }) {
-  const { activeAccount, selectedAccountId, user } = useAccount();
-  const userId = user?.uid;
-  const accountId = selectedAccountId;
+  const { activeAccount, selectedAccountId, user, accounts, accountsWithTrades, setSelectedAccountId } = useAccount();
+    const userId = user?.uid;
+    const accountId = selectedAccountId;
+  
+    useEffect(() => {
+     console.log(`[Dashboard Init] UID: ${userId}, Selected: ${accountId}, Mode: ${isDemoMode ? 'DEMO' : 'REAL'}`);
+     console.log(`[Dashboard Accounts List]`, accounts.map(a => ({ id: a.id, accNum: a.accountNumber })));
+     console.log(`[Dashboard Active Trades]`, accountsWithTrades);
+    }, [userId, accountId, isDemoMode, accounts, accountsWithTrades]);
 
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [totalAccountTrades, setTotalAccountTrades] = useState<number | null>(null);
   const [strategies, setStrategies] = useState<Map<string, string>>(new Map());
   const [timeFilter, setTimeFilter] = useState<'30d' | '90d' | 'all'>('30d');
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -71,6 +78,19 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
   useEffect(() => {
     if (!userId || !accountId) return;
 
+    // Diagnostic query to see if any trades exist at all for this account
+    const allTradesQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'trades'), limit(1));
+    const unsubscribeAll = onSnapshot(allTradesQuery, (snapshot) => {
+      console.log(`[Dashboard Diagnostic] Query Path: users/${userId}/accounts/${accountId}/trades`);
+      console.log(`[Dashboard Diagnostic] Total Trades Found ignoring Demo/Real filter: ${snapshot.empty ? 0 : '1+'}`);
+      setTotalAccountTrades(snapshot.empty ? 0 : 1);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${userId}/accounts/${accountId}/trades`);
+    });
+
+    console.log(`[Dashboard Query Trace] User: ${userId}, Account: ${accountId}, isDemo: ${isDemoMode}`);
+    console.log(`[Dashboard Path Trace] collection(db, 'users', '${userId}', 'accounts', '${accountId}', 'trades')`);
+
     const tradesQuery = query(
       collection(db, 'users', userId, 'accounts', accountId, 'trades'),
       where('isDemo', '==', isDemoMode),
@@ -78,12 +98,21 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
       limit(50)
     );
 
-    return onSnapshot(tradesQuery, async (snapshot) => {
+    const unsubscribeTrades = onSnapshot(tradesQuery, async (snapshot) => {
       const tradesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade));
+      console.log(`[Frontend Trace] Account: ${accountId}, isDemo: ${isDemoMode}, Received ${tradesData.length} trades`);
+      if (tradesData.length > 0) {
+        console.log(`[Frontend Trace] First trade sample:`, tradesData[0]);
+      }
       setTrades(tradesData);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'trades');
     });
+
+    return () => {
+      unsubscribeAll();
+      unsubscribeTrades();
+    };
   }, [userId, accountId, isDemoMode]);
 
   const filteredTrades = useMemo(() => {
@@ -353,133 +382,243 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
     }
   };
 
-  if (trades.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 animate-in fade-in duration-700">
-        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-emerald-500/10 text-emerald-500">
-          <TrendingUp size={40} />
-        </div>
-        <div className="max-w-md space-y-2">
-          <h2 className="text-2xl font-bold tracking-tight">
-            {isDemoMode ? "No Demo Data Found" : "Welcome to TradeFlow"}
-          </h2>
-          <p className="text-zinc-400">
-            {isDemoMode 
-              ? "You haven't generated any sample data yet. Click below to populate your dashboard with realistic trades."
-              : "Your trading journal is currently empty. Start by logging your first trade or explore the platform with sample data by switching to Demo Mode."}
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-4">
-          {isDemoMode ? (
-            <button
-              onClick={handleSeedData}
-              disabled={loadingEvents}
-              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-3 text-sm font-bold text-zinc-100 transition-all hover:bg-zinc-800 active:scale-95 disabled:opacity-50"
-            >
-              {loadingEvents ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap size={18} className="text-emerald-500" />}
-              Generate Sample Data
-            </button>
-          ) : (
-            <button
-              onClick={onOpenTradeForm}
-              className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-6 py-3 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-95"
-            >
-              <PlusCircle size={18} />
-              Log First Trade
-            </button>
-          )}
-        </div>
-        <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
-          {isDemoMode ? "Demo data is isolated from your real journal" : `All data is securely tied to your account: ${userId}`}
-        </p>
-      </div>
+  const [recentWebhooks, setRecentWebhooks] = useState<any[]>([]);
+  const [persistentLogs, setPersistentLogs] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!userId) return;
+    
+    // Live debug buffer (global)
+    const fetchWebhooks = async () => {
+      try {
+        const res = await fetch('/api/debug-webhooks');
+        const data = await res.json();
+        setRecentWebhooks(data.slice(0, 3));
+      } catch (e) {
+        console.error("Failed to fetch debug webhooks", e);
+      }
+    };
+
+    // User-specific persistent logs
+    const logsQuery = query(
+      collection(db, 'users', userId, 'webhook_logs'),
+      orderBy('timestamp', 'desc'),
+      limit(3)
     );
-  }
+    const unsubscribeLogs = onSnapshot(logsQuery, (snapshot) => {
+       setPersistentLogs(snapshot.docs.map(d => d.data()));
+    }, (error) => {
+       handleFirestoreError(error, OperationType.LIST, 'webhook_logs');
+    });
+
+    fetchWebhooks();
+    const interval = setInterval(fetchWebhooks, 5000);
+    return () => {
+      clearInterval(interval);
+      unsubscribeLogs();
+    };
+  }, [userId]);
 
   return (
     <div className="space-y-8">
-      {/* Header with Time Filter */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
-            <Activity size={24} />
+      {/* Real-time Connection Status - Always visible if account exists */}
+      {activeAccount && (
+        <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4 sm:p-6 animate-in fade-in duration-500">
+           <div className="flex flex-wrap items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
+              <RefreshCw size={20} className={cn((activeAccount.lastSync) && "animate-spin-slow")} />
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Sync Status</span>
+                {activeAccount.lastSync ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500">
+                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    CONNECTED • Account #{activeAccount.accountNumber}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold text-zinc-500 italic">No Sync Detected</span>
+                )}
+              </div>
+              <p className="text-sm font-medium text-zinc-100">
+                {activeAccount.lastSync 
+                  ? `Authenticated & Active` 
+                  : "Sync EA Required"}
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight">Trading Overview</h2>
-            <p className="text-sm text-zinc-400">Track your performance and goals</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
-          {(['30d', '90d', 'all'] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setTimeFilter(f)}
-              className={cn(
-                "rounded-lg px-4 py-1.5 text-xs font-bold uppercase transition-all",
-                timeFilter === f ? "bg-emerald-500 text-zinc-950" : "text-zinc-400 hover:text-zinc-100"
-              )}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* AI Briefing */}
-      {(aiBriefing || isBriefingLoading) && (
-        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6 shadow-sm backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-500">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-500">
-              <Zap size={18} />
+          {/* Webhook Activity Feed (The "Connection" evidence) */}
+          <div className="space-y-2 border-t border-zinc-800/50 pt-4">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Terminal Sync Logs</span>
+              {(persistentLogs.length > 0 || recentWebhooks.length > 0) && (
+                 <span className="text-[9px] text-emerald-500/70 font-mono italic">real-time monitoring active</span>
+              )}
             </div>
-            <h3 className="font-bold text-emerald-500">Daily AI Briefing</h3>
+            
+            {persistentLogs.length > 0 ? (
+              <div className="space-y-1.5 text-[11px] font-mono">
+                {persistentLogs.map((log, i) => (
+                  <div key={i} className="flex items-center gap-3 rounded bg-black/20 p-2 text-emerald-400 border-l border-emerald-500">
+                    <span className="text-emerald-500/50">[{log.timestamp?.split('T')[1]?.split('.')[0]}]</span>
+                    <span className="truncate">SUCCESS: Data packet received from MetaTrader</span>
+                    <span className="ml-auto rounded bg-zinc-800 px-1 text-[9px] text-zinc-400">
+                      {log.itemCount} items
+                    </span>
+                    <span className="text-zinc-500 hidden sm:inline">[{log.clientIp}]</span>
+                  </div>
+                ))}
+              </div>
+            ) : recentWebhooks.length > 0 ? (
+              <div className="space-y-1.5 text-[11px] font-mono opacity-50 grayscale">
+                <p className="text-[9px] text-zinc-600 mb-1">Incoming Webhooks (External/Global):</p>
+                {recentWebhooks.map((log, i) => (
+                  <div key={i} className="flex items-center gap-3 rounded bg-black/10 p-2 text-zinc-500">
+                    <span>[{log.time?.split('T')[1]?.split('.')[0]}]</span>
+                    <span className="truncate">Global Webhook Detected (Pending Auth)</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-zinc-800 p-4 text-center">
+                <p className="text-[10px] text-zinc-600 italic">Waiting for MetaTrader to send data... (Server is listening on /api/webhook/trade)</p>
+              </div>
+            )}
           </div>
-          {isBriefingLoading ? (
-            <div className="flex items-center gap-2">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-              <span className="text-sm text-zinc-400">Analyzing your performance...</span>
-            </div>
-          ) : (
-            <p className="text-sm leading-relaxed text-zinc-300 italic">"{aiBriefing}"</p>
-          )}
         </div>
       )}
 
-      {/* Real-time Connection Status */}
-      {activeAccount && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-2 sm:p-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
-            <RefreshCw size={16} className={cn((activeAccount.lastSync) && "animate-spin-slow")} />
+      {trades.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 animate-in fade-in duration-700">
+          <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-emerald-500/10 text-emerald-500">
+            <TrendingUp size={40} />
           </div>
-          <div className="flex-1 min-w-[200px]">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Connection Status</span>
-              {activeAccount.lastSync ? (
-                <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500">
-                  <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE • {activeAccount.broker || 'MetaTrader'} Account #{activeAccount.accountNumber}
-                </span>
-              ) : (
-                <span className="text-[10px] font-bold text-zinc-500 italic">No sync detected yet</span>
-              )}
-            </div>
-            <p className="text-xs text-zinc-400">
-              {activeAccount.lastSync 
-                ? `Last update received at ${format(new Date(activeAccount.lastSync), 'HH:mm:ss')}. Script is pushing data.` 
-                : "Attach the 'JournalSync' EA to any chart in MetaTrader to start automatic journaling."}
+          <div className="max-w-md space-y-2">
+            <h2 className="text-2xl font-bold tracking-tight">
+              {isDemoMode ? "No Demo Trades Found" : "Welcome to TradeFlow"}
+            </h2>
+            <p className="text-zinc-400 text-sm">
+              {isDemoMode 
+                ? "You haven't generated any sample data yet. Click below to populate your dashboard with realistic trades."
+                : "Your trading journal is currently empty. Our system is standing by to receive your MT5 trades."}
             </p>
+            
+            {(totalAccountTrades !== null && totalAccountTrades > 0) && (
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-amber-500">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <ShieldAlert size={16} />
+                  <p className="text-xs font-bold uppercase tracking-wider">Sync Detection</p>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  We detected trades in this account document, but they are flagged as <b>{isDemoMode ? "Real" : "Demo"}</b>. 
+                  Try switching the <b>{isDemoMode ? "Real/Demo" : "Real/Demo"}</b> toggle in the top right to see your synced data.
+                </p>
+              </div>
+            )}
+
+            {/* Sub-account availability check */}
+            {trades.length === 0 && !isDemoMode && (
+               <div className="mt-2 text-[10px] text-zinc-500 italic">
+                 No trades found for this account. Ensure your MT5 EA is connected and has synced trades.
+               </div>
+            )}
+
+            {/* NEW: Accounts with trades suggestion */}
+            {(!selectedAccountId || !accountsWithTrades.includes(selectedAccountId || '')) && accountsWithTrades.length > 0 && (
+              <div className="mt-6 space-y-3">
+                <div className="h-px bg-zinc-800 w-1/2 mx-auto" />
+                <p className="text-[10px] uppercase font-bold tracking-widest text-zinc-500">Suggested Accounts with Data</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {accountsWithTrades.map(id => {
+                    const acc = accounts.find(a => a.id === id);
+                    if (!acc) return null;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => setSelectedAccountId(id)}
+                        className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs font-medium text-emerald-400 transition-all hover:bg-emerald-500/10"
+                      >
+                         <Database size={12} />
+                         {acc.name || acc.accountNumber}
+                         <ChevronRight size={12} />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          {trades.find(t => t.status === 'OPEN') && (
-            <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 px-3 py-1.5">
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                <span className="text-xs font-bold text-blue-500">
-                  {trades.filter(t => t.status === 'OPEN').length} Open Trade(s)
-                </span>
+          <div className="flex flex-col sm:flex-row gap-4">
+            {isDemoMode ? (
+              <button
+                onClick={handleSeedData}
+                disabled={loadingEvents}
+                className="flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-3 text-sm font-bold text-zinc-100 transition-all hover:bg-zinc-800 active:scale-95 disabled:opacity-50"
+              >
+                {loadingEvents ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap size={18} className="text-emerald-500" />}
+                Generate Sample Data
+              </button>
+            ) : (
+              <button
+                onClick={onOpenTradeForm}
+                className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-6 py-3 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-95"
+              >
+                <PlusCircle size={18} />
+                Log First Trade
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Header with Time Filter */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
+                <Activity size={24} />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight">Trading Overview</h2>
+                <p className="text-sm text-zinc-400">Track your performance and goals</p>
               </div>
             </div>
+            <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
+              {(['30d', '90d', 'all'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setTimeFilter(f)}
+                  className={cn(
+                    "rounded-lg px-4 py-1.5 text-xs font-bold uppercase transition-all",
+                    timeFilter === f ? "bg-emerald-500 text-zinc-950" : "text-zinc-400 hover:text-zinc-100"
+                  )}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* AI Briefing */}
+          {(aiBriefing || isBriefingLoading) && (
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6 shadow-sm backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-500">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-500">
+                  <Zap size={18} />
+                </div>
+                <h3 className="font-bold text-emerald-500">Daily AI Briefing</h3>
+              </div>
+              {isBriefingLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+                  <span className="text-sm text-zinc-400">Analyzing your performance...</span>
+                </div>
+              ) : (
+                <p className="text-sm leading-relaxed text-zinc-300 italic">"{aiBriefing}"</p>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Stats Grid */}
