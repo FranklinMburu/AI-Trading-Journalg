@@ -40,6 +40,7 @@ export interface UserSettings {
     accountId: string;
     isActive: boolean;
   };
+  webhookSecret?: string;
 }
 
 export interface JournalEntry {
@@ -79,6 +80,7 @@ export interface TradingAccount {
   currency: string;
   balance: number;
   equity?: number;
+  lastSync?: string;
   type?: string;
   createdAt: string;
   lastUpdate: string;

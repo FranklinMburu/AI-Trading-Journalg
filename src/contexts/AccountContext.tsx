@@ -87,11 +87,15 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       const accList = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradingAccount));
       setAccounts(accList);
       
-      if (!selectedAccountId && accList.length > 0) {
-        const firstId = accList[0].id;
-        setSelectedAccountId(firstId);
-        localStorage.setItem('tradeflow_selected_account', firstId);
-      }
+      // Use functional update to avoid stale closure on selectedAccountId
+      setSelectedAccountId(prev => {
+        if (!prev && accList.length > 0) {
+          const firstId = accList[0].id;
+          localStorage.setItem('tradeflow_selected_account', firstId);
+          return firstId;
+        }
+        return prev;
+      });
       setIsLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/accounts`);
@@ -101,30 +105,43 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, [user]);
 
-  const handleSetSelectedAccountId = (id: string | null) => {
+  const handleSetSelectedAccountId = React.useCallback((id: string | null) => {
     setSelectedAccountId(id);
     if (id) {
       localStorage.setItem('tradeflow_selected_account', id);
     } else {
       localStorage.removeItem('tradeflow_selected_account');
     }
-  };
+  }, []);
 
-  const activeAccount = accounts.find(a => a.id === selectedAccountId) || null;
+  const activeAccount = React.useMemo(() => 
+    accounts.find(a => a.id === selectedAccountId) || null
+  , [accounts, selectedAccountId]);
+
+  const contextValue = React.useMemo(() => ({
+    user,
+    accounts,
+    userAccounts: accounts,
+    activeAccount,
+    selectedAccountId,
+    setSelectedAccountId: handleSetSelectedAccountId,
+    isDemoMode,
+    setIsDemoMode,
+    isAdmin,
+    isLoading
+  }), [
+    user, 
+    accounts, 
+    activeAccount, 
+    selectedAccountId, 
+    handleSetSelectedAccountId, 
+    isDemoMode, 
+    isAdmin, 
+    isLoading
+  ]);
 
   return (
-    <AccountContext.Provider value={{
-      user,
-      accounts,
-      userAccounts: accounts,
-      activeAccount,
-      selectedAccountId,
-      setSelectedAccountId: handleSetSelectedAccountId,
-      isDemoMode,
-      setIsDemoMode,
-      isAdmin,
-      isLoading
-    }}>
+    <AccountContext.Provider value={contextValue}>
       {children}
     </AccountContext.Provider>
   );

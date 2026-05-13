@@ -37,8 +37,8 @@ interface BacktestResult {
 import { useAccount } from '../contexts/AccountContext';
 
 export default function StrategyAnalysis() {
-  const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
-  const userId = activeAccount?.userId;
+  const { activeAccount, selectedAccountId, isDemoMode, user } = useAccount();
+  const userId = user?.uid;
   const accountId = selectedAccountId;
 
   const [loading, setLoading] = useState(true);
@@ -124,9 +124,29 @@ export default function StrategyAnalysis() {
   };
 
   const handleSeedXAUUSDData = async () => {
-    if (!userId || !accountId) return;
+    const effectiveUserId = user?.uid || userId;
+    let effectiveAccountId = accountId;
+
+    if (!effectiveUserId || isSeeding) return;
     setIsSeeding(true);
+
     try {
+      // If no account exists, create one first
+      if (!effectiveAccountId) {
+        const accRef = await addDoc(collection(db, 'users', effectiveUserId, 'accounts'), {
+          userId: effectiveUserId,
+          accountNumber: 'DEMO-001',
+          name: 'Demo Trading Account',
+          currency: 'USD',
+          broker: 'Demo',
+          balance: 10000,
+          equity: 10000,
+          createdAt: new Date().toISOString(),
+          lastUpdate: new Date().toISOString()
+        });
+        effectiveAccountId = accRef.id;
+      }
+
       const response = await generateContent({
         model: AI_MODELS.FLASH,
         contents: "Generate 10 realistic XAU/USD trades for the past month (Feb 21 - Mar 21, 2026). Use real historical prices from Google Search. Return a JSON array of objects with: symbol, entryPrice, exitPrice, quantity (0.1-1.0), direction (LONG/SHORT), status (CLOSED), pnl, entryTime (ISO), exitTime (ISO), and brief notes on market rationale. Today is March 21, 2026.",
@@ -155,11 +175,26 @@ export default function StrategyAnalysis() {
         },
       });
 
-      const trades = JSON.parse(response.text);
+      if (!response.text) {
+        throw new Error("Empty response from AI for seeding.");
+      }
+
+      let trades;
+      try {
+        const cleanedText = response.text.replace(/```json\n?|\n?```/g, '').trim();
+        trades = JSON.parse(cleanedText);
+      } catch (parseError) {
+        console.error("Failed to parse AI response as JSON:", response.text);
+        throw new Error("Failed to parse sample data. Please try again.");
+      }
+
+      if (!Array.isArray(trades)) {
+         throw new Error("Invalid format returned from AI.");
+      }
 
       // Create a strategy for these trades
-      const strategyRef = await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'strategies'), {
-        userId,
+      const strategyRef = await addDoc(collection(db, 'users', effectiveUserId, 'accounts', effectiveAccountId, 'strategies'), {
+        userId: effectiveUserId,
         name: 'XAU/USD Trend Following',
         rules: '1. Identify trend on Daily chart.\n2. Enter on 4H pullback to 20 EMA.\n3. Stop loss below recent swing low.\n4. Take profit at 2:1 Reward:Risk.',
         notes: 'Seeded historical data for XAU/USD performance analysis.',
@@ -169,9 +204,9 @@ export default function StrategyAnalysis() {
 
       // Add trades to Firestore
       const tradePromises = trades.map((trade: any) => 
-        addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
+        addDoc(collection(db, 'users', effectiveUserId, 'accounts', effectiveAccountId, 'trades'), {
           ...trade,
-          userId,
+          userId: effectiveUserId,
           strategyId: strategyRef.id,
           isDemo: true
         })
@@ -179,8 +214,9 @@ export default function StrategyAnalysis() {
 
       await Promise.all(tradePromises);
       alert('Successfully seeded XAU/USD trades for the last month!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'trades');
+    } catch (error: any) {
+      console.error('Seeding error:', error);
+      alert(`Failed to generate sample data: ${error.message || 'Unknown error'}`);
     } finally {
       setIsSeeding(false);
     }

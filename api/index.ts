@@ -52,11 +52,6 @@ app.get("/api/health", (req, res) => {
 app.post("/api/webhook/trade", async (req, res) => {
   const { userId: idOrEmail, secret, accountId } = req.query;
   const tradeData = req.body;
-  const webhookSecret = process.env.WEBHOOK_SECRET;
-
-  if (webhookSecret && secret !== webhookSecret) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
 
   if (!idOrEmail) return res.status(400).json({ error: "Missing userId" });
 
@@ -72,7 +67,47 @@ app.post("/api/webhook/trade", async (req, res) => {
       uid = userRecord.uid;
     }
 
+    // --- WEBHOOK SECURITY CHECK ---
+    const globalWebhookSecret = process.env.WEBHOOK_SECRET;
+    let userTargetSecret = globalWebhookSecret;
+
+    try {
+      const targetAccountId = String(accountId || tradeData.accountId || (Array.isArray(tradeData) && tradeData[0]?.accountId) || "DEFAULT");
+      const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
+      const settingsSnapshot = await db.collection("users").doc(uid)
+        .collection("accounts").doc(accountDocId)
+        .collection("settings").limit(1).get();
+      
+      if (!settingsSnapshot.empty) {
+        const settings = settingsSnapshot.docs[0].data();
+        if (settings.webhookSecret) {
+          userTargetSecret = settings.webhookSecret;
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch user settings for secret check.");
+    }
+
+    if (userTargetSecret && secret !== userTargetSecret) {
+      return res.status(401).json({ error: "Unauthorized: Invalid webhook secret" });
+    }
+
     const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
+    console.log(`Sync Request: User=${idOrEmail}, AccountsFound=${dataToProcess.length}, QueryId=${uid}`);
+
+    // Helper to sanitize date strings from MT5/MT4 (yyyy.mm.dd -> yyyy-mm-dd)
+    const sanitizeDate = (dateStr: any) => {
+      if (!dateStr || typeof dateStr !== "string") return new Date().toISOString();
+      try {
+        // Replace dots with hyphens for better JS parsing
+        const cleaned = dateStr.replace(/\./g, "-").replace(" ", "T");
+        const date = new Date(cleaned);
+        return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+      } catch (e) {
+        return new Date().toISOString();
+      }
+    };
+
     const results = [];
     const accountRefs = new Map();
 
@@ -84,10 +119,12 @@ app.post("/api/webhook/trade", async (req, res) => {
       if (accountRefs.has(accountDocId)) {
         accountRef = accountRefs.get(accountDocId);
       } else {
+        console.log(`Accessing account: ${accountDocId} for user ${uid}`);
         accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
         const accountDoc = await accountRef.get();
 
         if (!accountDoc.exists) {
+          console.log(`Auto-creating missing account: ${targetAccountId}`);
           await accountRef.set({
             userId: uid,
             accountNumber: targetAccountId,
@@ -104,28 +141,47 @@ app.post("/api/webhook/trade", async (req, res) => {
           if (item.equity !== undefined) updateData.equity = item.equity;
           await accountRef.update(updateData);
         }
+        // Mark last sync time
+        await accountRef.update({ lastSync: new Date().toISOString() });
         accountRefs.set(accountDocId, accountRef);
       }
 
-      const trade = {
+      const trade: any = {
         userId: uid,
         accountId: targetAccountId,
         symbol: item.symbol || "UNKNOWN",
-        entryPrice: item.entryPrice || item.price || 0,
-        exitPrice: item.exitPrice || item.price || 0,
-        quantity: item.quantity || 1,
-        direction: item.direction || "LONG",
-        status: item.status || "CLOSED",
-        pnl: item.pnl || 0,
-        entryTime: item.entryTime || new Date().toISOString(),
-        exitTime: item.exitTime || new Date().toISOString(),
+        entryPrice: parseFloat(item.entryPrice || item.price || 0),
+        exitPrice: parseFloat(item.exitPrice || item.price || 0),
+        quantity: parseFloat(item.quantity || 1),
+        direction: String(item.direction || "LONG").toUpperCase(),
+        status: String(item.status || "CLOSED").toUpperCase(),
+        pnl: parseFloat(item.pnl || 0),
+        entryTime: sanitizeDate(item.entryTime),
+        exitTime: sanitizeDate(item.exitTime),
         notes: item.notes || `Synced via Webhook`,
         tags: item.tags || ["broker-sync"],
-        isDemo: item.isDemo || false 
+        isDemo: item.isDemo === true || item.isDemo === "true" || false 
       };
 
-      const tradeAdded = await db.collection("users").doc(uid).collection("accounts").doc(accountDocId).collection("trades").add(trade);
-      results.push(tradeAdded.id);
+      if (item.ticket) trade.ticket = String(item.ticket);
+
+      if (item.ticket) {
+        const ticketId = `ticket_${String(item.ticket)}`;
+        const tradeRef = accountRef.collection("trades").doc(ticketId);
+        const existingTrade = await tradeRef.get();
+        
+        if (!existingTrade.exists) {
+          await tradeRef.set(trade);
+          results.push(ticketId);
+        } else {
+          if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
+            await tradeRef.update(trade);
+          }
+        }
+      } else {
+        const tradeAdded = await accountRef.collection("trades").add(trade);
+        results.push(tradeAdded.id);
+      }
     }
     
     res.json({ success: true, message: `${results.length} trades synced`, ids: results });

@@ -12,8 +12,8 @@ import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '..
 import { useAccount } from '../contexts/AccountContext';
 
 export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode: boolean; onOpenTradeForm?: () => void }) {
-  const { activeAccount, selectedAccountId } = useAccount();
-  const userId = activeAccount?.userId;
+  const { activeAccount, selectedAccountId, user } = useAccount();
+  const userId = user?.uid;
   const accountId = selectedAccountId;
 
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -32,16 +32,20 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
       collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
       where('isDemo', '==', isDemoMode)
     );
-    const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
+    return onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, (doc.data() as Strategy).name));
       setStrategies(sMap);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'strategies');
     });
+  }, [userId, accountId, isDemoMode]);
+
+  useEffect(() => {
+    if (!userId || !accountId) return;
 
     const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
-    const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
+    return onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) {
         setSettings(snapshot.docs[0].data() as UserSettings);
       } else {
@@ -62,6 +66,10 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'settings');
     });
+  }, [userId, accountId]); // Removed settings from dependencies to avoid loop
+
+  useEffect(() => {
+    if (!userId || !accountId) return;
 
     const tradesQuery = query(
       collection(db, 'users', userId, 'accounts', accountId, 'trades'),
@@ -70,18 +78,12 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
       limit(50)
     );
 
-    const unsubscribeTrades = onSnapshot(tradesQuery, async (snapshot) => {
+    return onSnapshot(tradesQuery, async (snapshot) => {
       const tradesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade));
       setTrades(tradesData);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'trades');
     });
-
-    return () => {
-      unsubscribeStrategies();
-      unsubscribeSettings();
-      unsubscribeTrades();
-    };
   }, [userId, accountId, isDemoMode]);
 
   const filteredTrades = useMemo(() => {
@@ -284,13 +286,34 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
   }, [userId, stats.totalTrades, timeFilter]);
 
   const handleSeedData = async () => {
-    if ((window as any).__isSeeding) return;
-    (window as any).__isSeeding = true;
-    setLoadingEvents(true); // Reuse loading state for UI feedback
+    const effectiveUserId = user?.uid || userId;
+    let effectiveAccountId = accountId;
 
-    const pairs = ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'AAPL', 'TSLA'];
-    const now = new Date();
+    if (!effectiveUserId || ((window as any).__isSeeding)) return;
+    
+    (window as any).__isSeeding = true;
+    setLoadingEvents(true);
+
     try {
+      // If no account exists, create one first
+      if (!effectiveAccountId) {
+        const accRef = await addDoc(collection(db, 'users', effectiveUserId, 'accounts'), {
+          userId: effectiveUserId,
+          accountNumber: 'DEMO-001',
+          name: 'Demo Trading Account',
+          currency: 'USD',
+          broker: 'Demo',
+          balance: 10000,
+          equity: 10000,
+          createdAt: new Date().toISOString(),
+          lastUpdate: new Date().toISOString()
+        });
+        effectiveAccountId = accRef.id;
+      }
+
+      const pairs = ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'AAPL', 'TSLA'];
+      const now = new Date();
+
       for (let i = 0; i < 30; i++) {
         const date = subDays(now, i);
         const numTrades = Math.floor(Math.random() * 3) + 1;
@@ -302,9 +325,9 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
           const pnl = win ? Math.random() * 1000 + 100 : -(Math.random() * 500 + 50);
           const exit = direction === 'LONG' ? entry + (pnl / 10) : entry - (pnl / 10);
           
-          await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
-            userId,
-            accountId,
+          await addDoc(collection(db, 'users', effectiveUserId, 'accounts', effectiveAccountId, 'trades'), {
+            userId: effectiveUserId,
+            accountId: effectiveAccountId,
             symbol: pair,
             entryPrice: entry,
             exitPrice: exit,
@@ -320,9 +343,9 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
         }
       }
       alert('Sample trades generated successfully!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Seeding error:', error);
-      alert('Failed to generate sample data.');
+      alert(`Failed to generate sample data: ${error.message || 'Unknown error'}`);
     } finally {
       (window as any).__isSeeding = false;
       setLoadingEvents(false);
@@ -417,6 +440,43 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
             </div>
           ) : (
             <p className="text-sm leading-relaxed text-zinc-300 italic">"{aiBriefing}"</p>
+          )}
+        </div>
+      )}
+
+      {/* Real-time Connection Status */}
+      {activeAccount && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-2 sm:p-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
+            <RefreshCw size={16} className={cn((activeAccount.lastSync) && "animate-spin-slow")} />
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Connection Status</span>
+              {activeAccount.lastSync ? (
+                <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500">
+                  <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  LIVE • {activeAccount.broker || 'MetaTrader'} Account #{activeAccount.accountNumber}
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-zinc-500 italic">No sync detected yet</span>
+              )}
+            </div>
+            <p className="text-xs text-zinc-400">
+              {activeAccount.lastSync 
+                ? `Last update received at ${format(new Date(activeAccount.lastSync), 'HH:mm:ss')}. Script is pushing data.` 
+                : "Attach the 'JournalSync' EA to any chart in MetaTrader to start automatic journaling."}
+            </p>
+          </div>
+          {trades.find(t => t.status === 'OPEN') && (
+            <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 px-3 py-1.5">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-xs font-bold text-blue-500">
+                  {trades.filter(t => t.status === 'OPEN').length} Open Trade(s)
+                </span>
+              </div>
+            </div>
           )}
         </div>
       )}

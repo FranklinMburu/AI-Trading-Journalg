@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserSettings } from '../types';
@@ -23,17 +23,21 @@ export default function NotificationManager() {
   
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [lastProcessedTradeId, setLastProcessedTradeId] = useState<string | null>(null);
+  const lastTradeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!userId || !accountId) return;
 
     const settingsQuery = query(collection(db, 'users', userId, 'accounts', accountId, 'settings'));
-    const unsubscribeSettings = onSnapshot(settingsQuery, (snapshot) => {
+    return onSnapshot(settingsQuery, (snapshot) => {
       if (!snapshot.empty) setSettings(snapshot.docs[0].data() as UserSettings);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'settings');
     });
+  }, [userId, accountId]);
+
+  useEffect(() => {
+    if (!userId || !accountId) return;
 
     const tradesQuery = query(
       collection(db, 'users', userId, 'accounts', accountId, 'trades'),
@@ -43,15 +47,15 @@ export default function NotificationManager() {
       limit(1)
     );
 
-    const unsubscribeTrades = onSnapshot(tradesQuery, (snapshot) => {
+    return onSnapshot(tradesQuery, (snapshot) => {
       if (snapshot.empty || !settings) return;
 
       const latestTrade = snapshot.docs[0].data() as Trade;
       const tradeId = snapshot.docs[0].id;
 
       // Only process if it's a new trade closure
-      if (tradeId !== lastProcessedTradeId) {
-        setLastProcessedTradeId(tradeId);
+      if (tradeId !== lastTradeIdRef.current) {
+        lastTradeIdRef.current = tradeId;
 
         const pnl = latestTrade.pnl || 0;
         const isWin = pnl > 0;
@@ -73,12 +77,7 @@ export default function NotificationManager() {
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'trades');
     });
-
-    return () => {
-      unsubscribeSettings();
-      unsubscribeTrades();
-    };
-  }, [userId, accountId, settings, lastProcessedTradeId, isDemoMode]);
+  }, [userId, accountId, settings, isDemoMode]);
 
   const addNotification = (notif: Omit<Notification, 'id' | 'timestamp'>) => {
     const id = Math.random().toString(36).substr(2, 9);

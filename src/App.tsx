@@ -13,6 +13,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
 import { Layout, TrendingUp, History as HistoryIcon, BookOpen, Brain, LogOut, Plus, User as UserIcon, ChevronRight, AlertCircle, Target, Calendar as CalendarIcon, Menu, X, Shield, Globe, LineChart as LineChartIcon, CheckCircle, Calculator, Database, Search, Command, Loader2, ArrowUp, Zap } from 'lucide-react';
 import { cn } from './lib/utils';
+import Lenis from 'lenis';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 import { Trade, Strategy, JournalEntry, TradingAccount } from './types';
@@ -83,33 +84,97 @@ export default function App() {
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [preSelectedTradeId, setPreSelectedTradeId] = useState<string | null>(null);
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+
+  // Global scroll effects
+  useEffect(() => {
+    // Only enable smooth scroll for landing page (when not logged in)
+    // The main app uses native scroll to avoid trackpad/touch issues
+    let lenis: Lenis | null = null;
+    
+    if (!user) {
+      lenis = new Lenis({
+        lerp: 0.22, 
+        wheelMultiplier: 1.0,
+        touchMultiplier: 2.0,
+        infinite: false,
+        autoResize: true,
+      });
+
+      function raf(time: number) {
+        lenis?.raf(time);
+        requestAnimationFrame(raf);
+      }
+
+      requestAnimationFrame(raf);
+      (window as any).lenis = lenis;
+    }
+
+    const handleScroll = () => {
+      const scrollPos = user 
+        ? (scrollContainerRef.current?.scrollTop || 0) 
+        : window.scrollY;
+      setShowBackToTop(scrollPos > 400);
+    };
+    
+    if (user) {
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        return () => {
+          container.removeEventListener('scroll', handleScroll);
+          if (lenis) {
+            lenis.destroy();
+            (window as any).lenis = undefined;
+          }
+        };
+      }
+    } else {
+      window.addEventListener('scroll', handleScroll, { passive: true });
+      return () => {
+        window.removeEventListener('scroll', handleScroll);
+        if (lenis) {
+          lenis.destroy();
+          (window as any).lenis = undefined;
+        }
+      };
+    }
+  }, [user]);
+
+  const lastBroadcastRef = React.useRef<string | null>(null);
 
   // AI Global Context Heartbeat
   useEffect(() => {
     if (!user) return;
     const broadcastContext = () => {
+      let data = `User is currently on the ${activeTab} tab. Account: ${selectedAccountId || 'All'}. Site status: Authenticated: ${user.email}.`;
+      if (isTradeFormOpen) data += ` The "New Trade" form is currently OPEN.`;
+      if (isSearchOpen) data += ` Global search is currently OPEN.`;
+      if (isDemoMode) data += ` The user is in DEMO MODE (viewing sample data).`;
+      
+      // Prevent infinite broadcast chains if state doesn't materially change
+      if (data === lastBroadcastRef.current) return;
+      lastBroadcastRef.current = data;
+
       window.dispatchEvent(new CustomEvent('nexus-global-context', {
         detail: {
           source: 'System Navigation',
-          data: `User is currently on the ${activeTab} tab. Account: ${selectedAccountId || 'All'}. Site status: Authenticated: ${user.email}.`
+          data: data
         }
       }));
     };
     
     broadcastContext();
-  }, [activeTab, user, selectedAccountId]);
+  }, [activeTab, user?.uid, selectedAccountId, isTradeFormOpen, isSearchOpen, isDemoMode]);
 
   const handleAccountChange = (accNo: string) => {
     setSelectedAccountId(accNo);
   };
 
   useEffect(() => {
-    const handleScroll = () => {
-      setShowBackToTop(window.scrollY > 400);
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+    if (!user) return;
+    // Initial data refresh logic if needed
+  }, [user]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -268,7 +333,13 @@ export default function App() {
 
         {showBackToTop && (
           <button 
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            onClick={() => {
+              if (scrollContainerRef.current) {
+                scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+              } else {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }
+            }}
             className="fixed bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-800 text-zinc-100 shadow-lg transition-all hover:bg-zinc-700 hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-bottom-4"
             title="Back to Top"
           >
@@ -319,7 +390,7 @@ export default function App() {
                   className="bg-transparent text-xs font-bold text-zinc-100 outline-none cursor-pointer"
                 >
                   {accounts.map(acc => (
-                    <option key={acc.id} value={acc.accountNumber} className="bg-zinc-900 text-zinc-100">
+                    <option key={acc.id} value={acc.id} className="bg-zinc-900 text-zinc-100">
                       {acc.name} ({acc.currency})
                     </option>
                   ))}
@@ -361,8 +432,11 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 scroll-smooth">
-          <div className="mx-auto max-w-6xl space-y-6 md:space-y-8">
+        <div 
+          ref={scrollContainerRef} 
+          className="flex-1 overflow-y-auto p-4 md:p-6"
+        >
+          <div className="mx-auto max-w-6xl space-y-6 md:space-y-8 will-change-transform">
             {isDemoMode && (
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 animate-in fade-in slide-in-from-top-2">
                 <div className="flex gap-3">
@@ -380,11 +454,13 @@ export default function App() {
             <Suspense fallback={<TabLoading />}>
               {activeTab === 'dashboard' && (
                 <Dashboard 
+                  isDemoMode={isDemoMode}
                   onOpenTradeForm={() => setIsTradeFormOpen(true)} 
                 />
               )}
               {activeTab === 'trades' && (
                 <TradeList 
+                  isDemoMode={isDemoMode}
                   onJournalTrade={(id) => {
                     setPreSelectedTradeId(id);
                     setActiveTab('journal');
@@ -420,6 +496,7 @@ export default function App() {
       {/* Trade Form Modal */}
       {isTradeFormOpen && (
         <TradeForm 
+          isDemoMode={isDemoMode}
           onClose={() => setIsTradeFormOpen(false)} 
         />
       )}

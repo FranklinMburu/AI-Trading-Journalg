@@ -92,19 +92,6 @@ async function startServer() {
     const { userId: idOrEmail, secret, accountId } = req.query;
     const tradeData = req.body;
 
-    // --- WEBHOOK SECURITY CONFIGURATION ---
-    // The WEBHOOK_SECRET is a user-defined key used to authorize incoming trade data.
-    // To set this up:
-    // 1. Define a random string (e.g., 'my-secure-key-123').
-    // 2. Add it to your environment variables/secrets as WEBHOOK_SECRET.
-    // 3. Include it in your webhook URL as a query parameter: &secret=my-secure-key-123
-    // If the environment variable is NOT set, the webhook will remain open (not recommended for production).
-    const webhookSecret = process.env.WEBHOOK_SECRET;
-    if (webhookSecret && secret !== webhookSecret) {
-      console.warn("Unauthorized webhook attempt with invalid secret");
-      return res.status(401).json({ error: "Unauthorized: Invalid webhook secret" });
-    }
-
     if (!idOrEmail) {
       return res.status(400).json({ error: "Missing userId parameter" });
     }
@@ -126,51 +113,81 @@ async function startServer() {
         uid = userRecord.uid;
       }
 
-      // Determine if we are processing a single trade or an array
-      const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
-      console.log(`Processing ${dataToProcess.length} trade(s) for user ${uid}`);
-
-      const results = [];
+      // --- WEBHOOK SECURITY CHECK ---
+      // Check for user-specific secret first, then fall back to environment secret
+      const globalWebhookSecret = process.env.WEBHOOK_SECRET;
       
-      // Cache account refs to avoid redundant fetches in a batch
-      const accountRefs = new Map();
-
-      for (const item of dataToProcess) {
-        // Ensure Account exists
-        const targetAccountId = String(accountId || item.accountId || "DEFAULT");
+      // Fetch user settings to check for a custom webhook secret
+      // We check all accounts for this user until we find one with a secret or use the default global one
+      let userTargetSecret = globalWebhookSecret;
+      
+      try {
+        const targetAccountId = String(accountId || "DEFAULT");
         const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
+        const settingsSnapshot = await db.collection("users").doc(uid)
+          .collection("accounts").doc(accountDocId)
+          .collection("settings").limit(1).get();
         
-        let accountRef;
-        if (accountRefs.has(accountDocId)) {
-          accountRef = accountRefs.get(accountDocId);
-        } else {
-          accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
-          const accountDoc = await accountRef.get();
-
-          if (!accountDoc.exists) {
-            console.log(`Creating new account record for ${targetAccountId} under user ${uid}`);
-            await accountRef.set({
-              userId: uid,
-              accountNumber: targetAccountId,
-              name: `MT Sync ${targetAccountId}`,
-              currency: item.currency || "USD",
-              balance: item.balance || 0,
-              equity: item.equity || 0,
-              createdAt: new Date().toISOString(),
-              lastUpdate: new Date().toISOString()
-            });
-          } else {
-            // Update balance/equity if provided
-            const updateData: any = { lastUpdate: new Date().toISOString() };
-            if (item.balance !== undefined) updateData.balance = item.balance;
-            if (item.equity !== undefined) updateData.equity = item.equity;
-            await accountRef.update(updateData);
+        if (!settingsSnapshot.empty) {
+          const settings = settingsSnapshot.docs[0].data();
+          if (settings.webhookSecret) {
+            userTargetSecret = settings.webhookSecret;
           }
+        }
+      } catch (err) {
+        console.warn("Could not fetch user settings for secret check, falling back to global secret if set.");
+      }
+
+      if (userTargetSecret && secret !== userTargetSecret) {
+        console.warn(`Unauthorized webhook attempt for user ${uid} with invalid secret`);
+        return res.status(401).json({ error: "Unauthorized: Invalid webhook secret" });
+      }
+
+    const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
+    console.log(`[Webhook] User: ${idOrEmail}, Items: ${dataToProcess.length}, QueryUID: ${uid}`);
+    if (dataToProcess.length > 0) console.log(`[Webhook] Payload Sample: ${JSON.stringify(dataToProcess[0])}`);
+
+    const results = [];
+    const accountRefs = new Map();
+
+    for (const item of dataToProcess) {
+      const targetAccountId = String(accountId || item.accountId || "DEFAULT");
+      const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
+      
+      let accountRef;
+      if (accountRefs.has(accountDocId)) {
+        accountRef = accountRefs.get(accountDocId);
+      } else {
+        console.log(`[Webhook] Syncing account ${accountDocId} for UID ${uid}`);
+        accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
+        const accountDoc = await accountRef.get();
+
+        if (!accountDoc.exists) {
+          console.log(`[Webhook] Creating account document for: ${targetAccountId}`);
+          await accountRef.set({
+            userId: uid,
+            accountNumber: targetAccountId,
+            name: `MT Sync ${targetAccountId}`,
+            currency: item.currency || "USD",
+            balance: item.balance || 0,
+            equity: item.equity || 0,
+            createdAt: new Date().toISOString(),
+            lastUpdate: new Date().toISOString()
+          });
+        } else {
+          // Update balance/equity if provided
+          const updateData: any = { lastUpdate: new Date().toISOString() };
+          if (item.balance !== undefined) updateData.balance = item.balance;
+          if (item.equity !== undefined) updateData.equity = item.equity;
+          await accountRef.update(updateData);
+        }
+          // Mark last sync time
+          await accountRef.update({ lastSync: new Date().toISOString() });
           accountRefs.set(accountDocId, accountRef);
         }
 
         // Map incoming data to Trade schema
-        const trade = {
+        const trade: any = {
           userId: uid,
           accountId: targetAccountId,
           symbol: item.symbol || "UNKNOWN",
@@ -182,14 +199,34 @@ async function startServer() {
           pnl: item.pnl || 0,
           entryTime: item.entryTime || new Date().toISOString(),
           exitTime: item.exitTime || new Date().toISOString(),
-          notes: item.notes || `Synced via Webhook (Account: ${targetAccountId})`,
+          notes: item.notes || `Synced via Webhook`,
           tags: item.tags || ["broker-sync"],
-          isDemo: item.isDemo || false 
+          isDemo: String(item.isDemo).toLowerCase() === 'true' || item.isDemo === true 
         };
 
+        if (item.ticket) trade.ticket = String(item.ticket);
+
         // Add to Firestore using nested structure
-        const tradeAdded = await db.collection("users").doc(uid).collection("accounts").doc(accountDocId).collection("trades").add(trade);
-        results.push(tradeAdded.id);
+        // If we have a ticket, use it as the doc ID to prevent duplicates
+        if (item.ticket) {
+          const ticketId = `ticket_${String(item.ticket)}`;
+          const tradeRef = accountRef.collection("trades").doc(ticketId);
+          const existingTrade = await tradeRef.get();
+          
+          if (!existingTrade.exists) {
+            await tradeRef.set(trade);
+            results.push(ticketId);
+          } else {
+            // Update existing trade if it was open but now is closed
+            if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
+              await tradeRef.update(trade);
+              console.log(`Updated trade ${ticketId} to CLOSED status`);
+            }
+          }
+        } else {
+          const tradeAdded = await accountRef.collection("trades").add(trade);
+          results.push(tradeAdded.id);
+        }
       }
       
       console.log(`Batch process complete. Total trades synced: ${results.length}`);

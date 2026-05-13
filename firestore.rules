@@ -17,7 +17,7 @@ service cloud.firestore {
     }
 
     function isOwner(userId) {
-      return isVerified() && request.auth.uid == userId;
+      return isSignedIn() && request.auth.uid == userId;
     }
 
     function isValidId(id) {
@@ -34,11 +34,11 @@ service cloud.firestore {
 
     // Admin logic - Only use email for initialization or if explicitly required
     function isAdmin() {
-      return isVerified() && (
+      return isSignedIn() && (
         request.auth.token.email == "franklinmburu05@gmail.com" || 
         request.auth.token.email == "franklinvidal198@gmail.com" ||
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin'
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
@@ -115,21 +115,20 @@ service cloud.firestore {
 
       // 2. Nested Accounts Collection (The Master Gate)
       match /accounts/{accountId} {
-        allow get, list: if isOwner(userId) || isAdmin();
+        allow read: if isOwner(userId) || isAdmin();
         allow create: if isOwner(userId) && isValidId(accountId) && isValidAccount(incoming(), userId);
         allow update: if isOwner(userId) && isValidAccount(incoming(), userId) && 
-                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'broker', 'balance', 'equity', 'lastUpdate']);
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'broker', 'balance', 'equity', 'lastUpdate', 'lastSync']);
         allow delete: if isOwner(userId);
 
         // 3. Nested Account Resources
         match /trades/{tradeId} {
-          allow list: if isOwner(userId) && resource.data.userId == userId; // Force query constraint
-          allow get: if isOwner(userId) || isAdmin();
+          allow read: if isOwner(userId) || isAdmin();
           allow create: if isOwner(userId) && isValidTrade(incoming(), userId, accountId);
           allow update: if isOwner(userId) && isValidTrade(incoming(), userId, accountId) && (
             // Action: Close Trade
             (existing().status == 'OPEN' && incoming().status == 'CLOSED' && 
-             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'exitPrice', 'exitTime', 'pnl', 'notes'])) ||
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'exitPrice', 'exitTime', 'pnl', 'notes', 'tags'])) ||
             // Action: Edit Notes/Tags
             (incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'tags', 'strategyId']))
           );
@@ -138,28 +137,28 @@ service cloud.firestore {
 
         match /journal_entries/{entryId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if isOwner(userId) && isValidJournalEntry(incoming(), userId, accountId);
-          allow update: if isOwner(userId) && isValidJournalEntry(incoming(), userId, accountId);
-          allow delete: if isOwner(userId);
+          allow create: if (isOwner(userId) && isVerified()) && isValidJournalEntry(incoming(), userId, accountId);
+          allow update: if (isOwner(userId) && isVerified()) && isValidJournalEntry(incoming(), userId, accountId);
+          allow delete: if (isOwner(userId) && isVerified());
         }
 
         match /strategies/{strategyId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if isOwner(userId) && isValidStrategy(incoming(), userId, accountId);
-          allow update: if isOwner(userId) && isValidStrategy(incoming(), userId, accountId);
-          allow delete: if isOwner(userId);
+          allow create: if (isOwner(userId) && isVerified()) && isValidStrategy(incoming(), userId, accountId);
+          allow update: if (isOwner(userId) && isVerified()) && isValidStrategy(incoming(), userId, accountId);
+          allow delete: if (isOwner(userId) && isVerified());
         }
 
         match /settings/{settingId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if isOwner(userId) && isValidSettings(incoming(), userId);
-          allow update: if isOwner(userId) && isValidSettings(incoming(), userId);
-          allow delete: if isOwner(userId);
+          allow create: if (isOwner(userId) && isVerified()) && isValidSettings(incoming(), userId);
+          allow update: if (isOwner(userId) && isVerified()) && isValidSettings(incoming(), userId);
+          allow delete: if (isOwner(userId) && isVerified());
         }
 
         match /transactions/{transactionId} {
           allow read: if isOwner(userId) || isAdmin();
-          allow create: if isOwner(userId);
+          allow create: if (isOwner(userId) && isVerified());
           allow update, delete: if isAdmin();
         }
       }

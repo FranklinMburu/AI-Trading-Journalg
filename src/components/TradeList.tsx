@@ -146,8 +146,8 @@ const TradeCard = React.memo(({
 import { useAccount } from '../contexts/AccountContext';
 
 export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: boolean, onJournalTrade?: (id: string) => void }) {
-  const { activeAccount, selectedAccountId } = useAccount();
-  const userId = activeAccount?.userId;
+  const { activeAccount, selectedAccountId, user } = useAccount();
+  const userId = user?.uid || activeAccount?.userId;
   const accountId = selectedAccountId;
 
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -228,35 +228,41 @@ export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: 
   }, [userId, accountId, isDemoMode]);
 
   const handleBrokerSync = async () => {
-    if (!settings?.brokerConfig?.isActive || !settings.brokerConfig.metaApiToken || !settings.brokerConfig.accountId) {
-      alert('Please configure and enable your Broker Connection in Settings first.');
+    // If they have MetaApi configured, run that as priority
+    if (settings?.brokerConfig?.isActive && settings.brokerConfig.metaApiToken && settings.brokerConfig.accountId) {
+      setSyncing(true);
+      try {
+        const response = await fetch('/api/broker/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            metaApiToken: settings.brokerConfig.metaApiToken,
+            accountId: settings.brokerConfig.accountId
+          })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          alert(data.message);
+        } else {
+          throw new Error(data.error || 'Sync failed');
+        }
+      } catch (error) {
+        console.error('Broker sync error:', error);
+        alert('Failed to sync with broker. Please check your MetaApi credentials in Settings.');
+      } finally {
+        setSyncing(false);
+      }
       return;
     }
 
-    setSyncing(true);
-    try {
-      const response = await fetch('/api/broker/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          metaApiToken: settings.brokerConfig.metaApiToken,
-          accountId: settings.brokerConfig.accountId
-        })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        alert(data.message);
-      } else {
-        throw new Error(data.error || 'Sync failed');
-      }
-    } catch (error) {
-      console.error('Broker sync error:', error);
-      alert('Failed to sync with broker. Please check your MetaApi credentials in Settings.');
-    } finally {
-      setSyncing(false);
-    }
+    // Fallback for Webhook Sync
+    const lastSyncInfo = activeAccount?.lastSync 
+      ? `✅ Connection Active!\nLast trade synced at: ${format(new Date(activeAccount.lastSync), 'MMM d, HH:mm:ss')}` 
+      : '⌛ Waiting for first sync...';
+    
+    alert(`MT Sync Status (JournalSync EA):\n\n${lastSyncInfo}\n\nHow it works:\n1. Your trades are pushed automatically from MetaTrader as they close.\n2. You DON'T need to provide your broker password here—the EA is secure.\n3. Historical Trades: If you want to sync your past Exness trades, turn on "Include All History" in Settings, then re-copy and run the script.`);
   };
 
   const handleDelete = async () => {
@@ -434,13 +440,29 @@ export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: 
             onClick={handleBrokerSync}
             disabled={syncing}
             className={cn(
-              "flex items-center gap-2 rounded-xl border border-zinc-800 px-4 py-2 text-sm font-medium transition-all hover:bg-zinc-800 disabled:opacity-50",
-              syncing && "text-emerald-500"
+              "flex flex-col items-center gap-0.5 rounded-xl border border-zinc-800 px-4 py-1.5 text-sm font-medium transition-all hover:bg-zinc-800 disabled:opacity-50",
+              (syncing || activeAccount?.lastSync) && "text-emerald-500 border-emerald-500/30"
             )}
             title="Sync trades from MetaApi/Broker"
           >
-            <RefreshCw size={16} className={cn(syncing && "animate-spin")} />
-            {syncing ? 'Syncing...' : 'Sync Broker'}
+            {activeAccount?.lastSync ? (
+              <div className="flex flex-col items-center gap-0.5">
+                <RefreshCw size={12} className={cn("text-emerald-500", syncing && "animate-spin")} />
+                <span className="text-[10px] font-bold text-emerald-500 uppercase flex items-center gap-1.5 whitespace-nowrap">
+                  Live Sync
+                  <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                </span>
+                <span className="text-[8px] font-medium text-zinc-400">
+                  {format(new Date(activeAccount.lastSync), 'HH:mm')}
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-0.5">
+                <RefreshCw size={12} className={cn("text-zinc-500", syncing && "animate-spin")} />
+                <span className="text-[10px] font-bold text-zinc-500 uppercase">Sync Broker</span>
+                <span className="text-[8px] font-medium text-zinc-500">Manual setup</span>
+              </div>
+            )}
           </button>
           {trades.some(t => t.status === 'OPEN') && (
             <button 

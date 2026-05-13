@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch, deleteDoc, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch, deleteDoc, orderBy, setDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { UserSettings, TradingAccount } from '../types';
-import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, RefreshCw, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X, Lock, Key } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth } from '../firebase';
 
 import { useAccount } from '../contexts/AccountContext';
 
 export default function Settings() {
-  const { activeAccount, userAccounts, selectedAccountId, isDemoMode } = useAccount();
-  const userId = activeAccount?.userId;
+  const { activeAccount, userAccounts, selectedAccountId, isDemoMode, user: contextUser } = useAccount();
+  const userId = contextUser?.uid || activeAccount?.userId;
   const accountId = selectedAccountId;
   
-  const user = auth.currentUser;
+  const user = contextUser || auth.currentUser;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -76,12 +76,13 @@ export default function Settings() {
   const handleManualAddAccount = async () => {
     if (!newAccData.accountNumber || !newAccData.name || !userId) return;
     try {
-      await addDoc(collection(db, 'users', userId, 'accounts'), {
+      const accountDocId = newAccData.accountNumber.replace(/[^a-zA-Z0-9]/g, "_");
+      await setDoc(doc(db, 'users', userId, 'accounts', accountDocId), {
         userId,
         accountNumber: newAccData.accountNumber,
         name: newAccData.name,
         currency: newAccData.currency,
-        broker: newAccData.broker,
+        broker: newAccData.broker || 'Manual',
         balance: 0,
         equity: 0,
         createdAt: new Date().toISOString(),
@@ -162,20 +163,30 @@ export default function Settings() {
   };
 
   const [mtVersion, setMtVersion] = useState<'mt4' | 'mt5'>('mt5');
+  const [syncHistoryOnStart, setSyncHistoryOnStart] = useState(false);
 
   const mt4Script = `// JournalSync EA for TradeFlow (MT4 Version)
 #property copyright "TradeFlow.ai"
 #property version   "1.20"
 #property strict
 
-input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId}";
+input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || 'PLEASE_LOGIN'}";
 input string Secret = ""; 
+input bool SyncHistoryOnStart = ${syncHistoryOnStart}; // Set to true to sync all past trades on first run
 
 int last_history_cnt = 0;
 
 int OnInit() {
    last_history_cnt = OrdersHistoryTotal();
    Print("TradeFlow JournalSync Started. Monitoring MT4 Account: ", AccountNumber());
+   
+   if(SyncHistoryOnStart && last_history_cnt > 0) {
+      Print("Syncing historical trades...");
+      for(int i = 0; i < last_history_cnt; i++) {
+         if(OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) SendTradeToJournal();
+      }
+   }
+   
    return(INIT_SUCCEEDED);
 }
 
@@ -192,18 +203,29 @@ void OnTick() {
 }
 
 void SendTradeToJournal() {
+   int type = OrderType();
+   if(type != OP_BUY && type != OP_SELL) return;
+   
    string accountNo = IntegerToString(AccountNumber());
    string finalUrl = WebhookURL + "&accountId=" + accountNo;
    if(Secret != "") finalUrl = finalUrl + "&secret=" + Secret;
 
+   bool isDemo = IsDemo();
+   datetime closeTime = OrderCloseTime();
+   string status = (closeTime == 0) ? "OPEN" : "CLOSED";
+   
    string postData = "{" +
+      "\\"ticket\\":\\"" + IntegerToString(OrderTicket()) + "\\"," +
+      "\\"isDemo\\":" + (isDemo ? "true" : "false") + "," +
+      "\\"status\\":\\"" + status + "\\"," +
       "\\"symbol\\":\\"" + OrderSymbol() + "\\"," +
       "\\"direction\\":\\"" + (OrderType()==OP_BUY ? "LONG" : "SHORT") + "\\"," +
       "\\"entryPrice\\":" + DoubleToString(OrderOpenPrice(), Digits) + "," +
-      "\\"price\\":" + DoubleToString(OrderClosePrice(), Digits) + "," +
+      "\\"exitPrice\\":" + DoubleToString(OrderClosePrice(), Digits) + "," +
       "\\"pnl\\":" + DoubleToString(OrderProfit() + OrderCommission() + OrderSwap(), 2) + "," +
       "\\"quantity\\":" + DoubleToString(OrderLots(), 2) + "," +
       "\\"entryTime\\":\\"" + TimeToString(OrderOpenTime(), TIME_DATE|TIME_SECONDS) + "\\"," +
+      (status == "CLOSED" ? "\\"exitTime\\":\\"" + TimeToString(closeTime, TIME_DATE|TIME_SECONDS) + "\\"," : "") +
       "\\"accountId\\":\\"" + accountNo + "\\"" +
    "}";
 
@@ -219,9 +241,9 @@ void SendTradeToJournal() {
 #property strict
 #property version "1.10"
 
-input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId}";
+input string WebhookURL = "${window.location.origin}/api/webhook/trade?userId=${userId || 'PLEASE_LOGIN'}";
 input string Secret = "";
-bool SyncHistoryOnStart = false; // Set to true to sync all past trades on first run
+input bool SyncHistoryOnStart = ${syncHistoryOnStart}; // Set to true to sync all past trades on first run
 
 ulong lastDealTicket = 0;
 
@@ -262,7 +284,31 @@ void SendTradeToJournal(ulong ticket) {
    string accountNo = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
    string finalUrl = WebhookURL + "&accountId=" + accountNo;
    if(Secret != "") finalUrl += "&secret=" + Secret;
-   string json = "{\\"symbol\\":\\""+symbol+"\\",\\"direction\\":\\""+direction+"\\",\\"entryPrice\\":"+DoubleToString(entryPrice,2)+",\\"price\\":"+DoubleToString(entryPrice,2)+",\\"pnl\\":"+DoubleToString(pnl,2)+",\\"quantity\\":"+DoubleToString(volume,2)+",\\"entryTime\\":\\""+entryTime+"\\",\\"accountId\\":\\""+accountNo+"\\"}";
+   uint entryOut = (uint)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+   string status = (entryOut == DEAL_ENTRY_OUT) ? "CLOSED" : "OPEN";
+   bool isDemo = (AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_REAL);
+   
+   // For CLOSED deals, we want to know the entry deal to get the entry time/price
+   double openPrice = entryPrice;
+   datetime openTime = dealTime;
+   if(status == "CLOSED") {
+      long posId = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+      if(HistorySelectByPosition(posId)) {
+         int posDeals = HistoryDealsTotal();
+         for(int i=0; i<posDeals; i++) {
+            ulong t = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(t, DEAL_ENTRY) == DEAL_ENTRY_IN) {
+               openPrice = HistoryDealGetDouble(t, DEAL_PRICE);
+               openTime = (datetime)HistoryDealGetInteger(t, DEAL_TIME);
+               break;
+            }
+         }
+      }
+   }
+
+   string json = StringFormat("{\\"ticket\\":\\"%d\\",\\"status\\":\\"%s\\",\\"isDemo\\":%s,\\"symbol\\":\\"%s\\",\\"direction\\":\\"%s\\",\\"entryPrice\\":%f,\\"exitPrice\\":%f,\\"pnl\\":%f,\\"quantity\\":%f,\\"entryTime\\":\\"%s\\"%s,\\"accountId\\":\\"%s\\"}",
+      ticket, status, (isDemo?"true":"false"), symbol, direction, openPrice, entryPrice, pnl, volume, TimeToString(openTime, TIME_DATE|TIME_SECONDS), 
+      (status == "CLOSED" ? ",\\"exitTime\\":\\"" + TimeToString(dealTime, TIME_DATE|TIME_SECONDS) + "\\"" : ""), accountNo);
    char post[], result[];
    StringToCharArray(json, post);
    string headers = "Content-Type: application/json\\r\\n";
@@ -491,7 +537,62 @@ void SendTradeToJournal(ulong ticket) {
           </div>
         </div>
 
-        {/* Notifications */}
+        {/* Webhook Security */}
+        <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2">
+          <div className="flex items-center gap-2 text-rose-500">
+            <Lock size={20} />
+            <h4 className="font-bold">Webhook Security</h4>
+          </div>
+          <div className="space-y-4">
+            <p className="text-xs text-zinc-400">
+              Set a secret key to authenticate trade data from your MetaTrader terminal. 
+              This prevents unauthorized data from being sent to your journal.
+            </p>
+            <div className="relative">
+              <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+              <input
+                type="text"
+                placeholder="Enter a secret key (e.g. my-secure-key-123)"
+                value={userSettings.webhookSecret || ''}
+                onChange={(e) => setUserSettings({ ...userSettings, webhookSecret: e.target.value })}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 py-2 pl-10 pr-4 text-sm focus:border-rose-500 focus:outline-none"
+              />
+            </div>
+            {userSettings.webhookSecret && (
+              <p className="text-[10px] text-zinc-500 italic">
+                Remember to also set this secret in your MT4/MT5 EA's "Secret" input field.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Sync Controls */}
+        <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2">
+          <div className="flex items-center gap-2 text-blue-500">
+            <RefreshCw size={20} />
+            <h4 className="font-bold">Journal Sync Controls</h4>
+          </div>
+          <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-950/50 border border-zinc-800">
+            <div>
+              <p className="text-sm font-bold text-zinc-100">Include All History on Start</p>
+              <p className="text-xs text-zinc-500">Automatically sync your entire trading history when the EA starts.</p>
+            </div>
+            <button
+               onClick={() => setSyncHistoryOnStart(!syncHistoryOnStart)}
+               className={cn(
+                 "relative h-6 w-11 rounded-full transition-colors focus:outline-none",
+                 syncHistoryOnStart ? "bg-blue-500" : "bg-zinc-800"
+               )}
+            >
+              <div className={cn(
+                "absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform",
+                syncHistoryOnStart ? "translate-x-5" : "translate-x-0"
+              )} />
+            </button>
+          </div>
+        </div>
+
+        {/* Notification Preferences */}
         <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2">
           <div className="flex items-center gap-2 text-emerald-500">
             <Bell size={20} />
@@ -545,10 +646,10 @@ void SendTradeToJournal(ulong ticket) {
                 <p className="text-[10px] font-bold uppercase text-emerald-500 mb-1">Your Base Webhook URL:</p>
                 <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
                   <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
-                    {window.location.origin}/api/webhook/trade?userId={userId}
+                    {window.location.origin}/api/webhook/trade?userId={userId}{userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}
                   </code>
                   <button 
-                    onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}`)}
+                    onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}${userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}`)}
                     className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500"
                   >
                     Copy
@@ -583,16 +684,22 @@ void SendTradeToJournal(ulong ticket) {
           </div>
 
           {/* MQL Code Block */}
-          <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
+          <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 p-6">
+            <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-[10px] font-bold uppercase text-zinc-500">MQL Script (Copy to MetaEditor)</p>
-                <div className="mt-2 flex gap-2">
+                <h4 className="flex items-center gap-2 text-sm font-bold text-zinc-100">
+                  <Shield size={16} className="text-emerald-500" />
+                  JournalSync EA (Safe Connection)
+                </h4>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Secure local sync: No broker credentials or passwords required.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
                   <button 
                     onClick={() => setMtVersion('mt4')}
                     className={cn(
-                      "rounded-lg px-3 py-1 text-[10px] font-bold transition-all",
-                      mtVersion === 'mt4' ? "bg-emerald-500 text-zinc-950" : "bg-zinc-900 text-zinc-500 hover:bg-zinc-800"
+                      "rounded-lg px-3 py-1 text-[10px] font-bold transition-all border",
+                      mtVersion === 'mt4' ? "bg-zinc-100 text-zinc-950 border-zinc-100" : "bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-800"
                     )}
                   >
                     MT4 Version
@@ -600,30 +707,78 @@ void SendTradeToJournal(ulong ticket) {
                   <button 
                     onClick={() => setMtVersion('mt5')}
                     className={cn(
-                      "rounded-lg px-3 py-1 text-[10px] font-bold transition-all",
-                      mtVersion === 'mt5' ? "bg-emerald-500 text-zinc-950" : "bg-zinc-900 text-zinc-500 hover:bg-zinc-800"
+                      "rounded-lg px-3 py-1 text-[10px] font-bold transition-all border",
+                      mtVersion === 'mt5' ? "bg-zinc-100 text-zinc-950 border-zinc-100" : "bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-800"
                     )}
                   >
                     MT5 Version
                   </button>
+                  <button 
+                    onClick={() => setSyncHistoryOnStart(!syncHistoryOnStart)}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg px-3 py-1 text-[10px] font-bold transition-all border",
+                      syncHistoryOnStart 
+                        ? "bg-blue-500/10 border-blue-500/50 text-blue-400" 
+                        : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:bg-zinc-800"
+                    )}
+                  >
+                    <div className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      syncHistoryOnStart ? "bg-blue-400 animate-pulse" : "bg-zinc-700"
+                    )} />
+                    Include All History
+                  </button>
                 </div>
               </div>
               <button 
-                onClick={() => navigator.clipboard.writeText(mtVersion === 'mt4' ? mt4Script : mt5Script)}
-                className="text-[10px] font-bold text-blue-500 hover:text-blue-400"
+                onClick={() => {
+                  navigator.clipboard.writeText(mtVersion === 'mt4' ? mt4Script : mt5Script);
+                  alert(`${mtVersion.toUpperCase()} Script copied to clipboard!`);
+                }}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-500"
               >
-                Copy Full {mtVersion.toUpperCase()} Script
+                Copy {mtVersion.toUpperCase()} Script
               </button>
             </div>
-            <pre className="max-h-48 overflow-y-auto rounded-lg bg-zinc-900 p-3 text-[9px] text-zinc-400 font-mono">
-              {mtVersion === 'mt4' ? mt4Script : mt5Script}
-            </pre>
-            <div className="mt-2 rounded bg-blue-500/5 p-2 text-[8px] text-blue-400 border border-blue-500/10">
-              {mtVersion === 'mt5' ? (
-                <span><strong>Pro Tip:</strong> Setting <code>SyncHistoryOnStart = true;</code> in the script will sync your entire MT5 trade history to the journal on the first run.</span>
-              ) : (
-                <span><strong>Note:</strong> MT4 version syncs new trades. For historical data on MT4, please use the manual import or contact support for a bulk sync tool.</span>
-              )}
+            
+            <div className="relative group">
+              <pre 
+                className="max-h-64 overflow-y-auto rounded-xl bg-zinc-900/50 border border-zinc-800 p-4 text-[9px] text-zinc-400 font-mono leading-relaxed"
+              >
+                {mtVersion === 'mt4' ? mt4Script : mt5Script}
+              </pre>
+              <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-zinc-950 to-transparent pointer-events-none rounded-b-xl" />
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-[10px]">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+                <span className="font-bold text-zinc-300 block mb-2 uppercase tracking-wider">How to install</span>
+                <ol className="list-decimal list-inside space-y-1.5 text-zinc-500">
+                  <li>Open MetaTrader on your PC</li>
+                  <li>Go to <span className="text-zinc-300">Tools → MetaQuotes Language Editor</span></li>
+                  <li>Click <span className="text-zinc-300">New → Expert Advisor</span> and name it "JournalSync"</li>
+                  <li>Delete all code there and <span className="text-zinc-300">Paste</span> the script above</li>
+                  <li>Press <span className="text-emerald-500 font-bold">Compile</span> (F7)</li>
+                  <li>Go to MetaTrader <span className="text-zinc-300">Tools → Options → Expert Advisors</span></li>
+                  <li>Check <span className="text-zinc-300">"Allow WebRequest for listed URL"</span> and add: <span className="text-blue-400 font-mono tracking-tighter">{window.location.host}</span></li>
+                  <li>Drag "JournalSync" from the Navigator to any chart</li>
+                  <li>In the <span className="text-zinc-300">Inputs</span> tab, set <span className="text-blue-400 font-bold">SyncHistoryOnStart</span> to <span className="text-emerald-400">true</span></li>
+                </ol>
+              </div>
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                <span className="font-bold text-blue-400 block mb-2 uppercase tracking-wider text-center flex items-center justify-center gap-2">
+                  <RefreshCw size={12} className="animate-spin" />
+                  Past Trades Sync
+                </span>
+                <p className="text-zinc-500 leading-relaxed">
+                  {syncHistoryOnStart 
+                    ? "✅ The script is now set to sync EVERY trade in your history the moment you attach it to a chart. Good for first-time setup!"
+                    : "By default, the script only syncs NEW trades that close while it's running. Toggle 'Include All History' above if you want to import your entire Exness history."}
+                </p>
+                <div className="mt-3 pt-3 border-t border-blue-500/10 text-center">
+                  <p className="text-[9px] text-blue-400/70 font-medium">Syncs automatically. No broker login required.</p>
+                </div>
+              </div>
             </div>
           </div>
         </div>

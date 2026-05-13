@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, useScroll, useTransform, useSpring, useInView } from 'motion/react';
 import { TrendingUp, Brain, Shield, Zap, Target, BarChart3, ChevronRight, Globe, Lock, Cpu, Sparkles, Binary, Menu, X } from 'lucide-react';
 import { cn } from '../lib/utils';
-import Lenis from 'lenis';
 
 interface LandingPageProps {
   onSignIn: () => void;
@@ -28,7 +27,7 @@ const FeatureModule = React.memo(({ module, index, total }: FeatureModuleProps) 
   });
 
   // Snappier spring for more immediate visual feedback
-  const smoothProgress = useSpring(scrollYProgress, { stiffness: 60, damping: 35, mass: 0.4 });
+  const smoothProgress = useSpring(scrollYProgress, { stiffness: 100, damping: 30, mass: 0.25 });
 
   // Transform mapping for cinematic camera feel - Adjusted for mobile
   const z = useTransform(smoothProgress, [0, 0.45, 0.55, 1], [-600, 0, 0, -600]);
@@ -66,7 +65,13 @@ const FeatureModule = React.memo(({ module, index, total }: FeatureModuleProps) 
   return (
     <div 
       ref={ref} 
-      onClick={() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+      onClick={() => {
+        if ((window as any).lenis) {
+          (window as any).lenis.scrollTo(ref.current);
+        } else {
+          ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }}
       className="relative h-[150vh] md:h-[200vh] w-full flex items-center justify-center isolation-isolate cursor-pointer px-4 md:px-0"
     >
       <div className="sticky top-0 flex h-screen w-full items-center justify-center perspective-[1500px] md:perspective-[2500px]">
@@ -192,25 +197,6 @@ export default function LandingPage({ onSignIn }: LandingPageProps) {
     offset: ["start start", "end end"]
   });
 
-  // Smooth inertial scroll integration
-  useEffect(() => {
-    const lenis = new Lenis({
-      lerp: 0.12, // Increased for snappier response while staying liquid
-      wheelMultiplier: 1, 
-      touchMultiplier: 1.2,
-      smoothWheel: true,
-      syncTouch: true, // Better touch response synchronization
-    });
-
-    function raf(time: number) {
-      lenis.raf(time);
-      requestAnimationFrame(raf);
-    }
-
-    requestAnimationFrame(raf);
-    return () => lenis.destroy();
-  }, []);
-
   const scaleX = useSpring(scrollYProgress, {
     stiffness: 80,
     damping: 30,
@@ -221,16 +207,19 @@ export default function LandingPage({ onSignIn }: LandingPageProps) {
   const mouseY = useSpring(0, { stiffness: 50, damping: 30 });
 
   useEffect(() => {
+    // Disable on mobile/touch to save cycles
+    if (window.innerWidth < 768) return;
+
     const handleMouseMove = (e: MouseEvent) => {
       mouseX.set((e.clientX / window.innerWidth - 0.5) * 2);
       mouseY.set((e.clientY / window.innerHeight - 0.5) * 2);
     };
-    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mousemove', handleMouseMove, { passive: true });
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [mouseX, mouseY]);
 
   return (
-    <div ref={containerRef} className="relative min-h-screen overflow-hidden bg-zinc-950 text-zinc-100 selection:bg-emerald-500/30 font-sans">
+    <div ref={containerRef} className="relative min-h-screen bg-zinc-950 text-zinc-100 selection:bg-emerald-500/30 font-sans">
       {/* Cinematic Progress Bar */}
       <motion.div 
         className="fixed top-0 left-0 right-0 z-[100] h-[2px] bg-gradient-to-r from-indigo-500 via-emerald-500 to-cyan-500 origin-left"

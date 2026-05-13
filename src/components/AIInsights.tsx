@@ -70,8 +70,11 @@ export default function AIInsights() {
     };
   }, [userId, accountId, isDemoMode]);
 
+  const lastInsightsRef = React.useRef<string | null>(null);
+
   useEffect(() => {
-    if (insights[mode]) {
+    if (insights[mode] && insights[mode] !== lastInsightsRef.current) {
+      lastInsightsRef.current = insights[mode];
       const timer = setTimeout(() => {
         window.dispatchEvent(new CustomEvent('nexus-global-context', {
           detail: {
@@ -84,8 +87,8 @@ export default function AIInsights() {
     }
   }, [insights, mode]);
 
-  const generateInsights = async (force = false) => {
-    if (trades.length === 0) {
+  const generateInsights = React.useCallback(async (force = false) => {
+    if (!trades || trades.length === 0) {
       setChatHistory([{ role: 'assistant', content: "I need at least a few closed trades to analyze your performance. Log some trades first!" }]);
       return;
     }
@@ -95,9 +98,13 @@ export default function AIInsights() {
     const contextHash = `${trades.length}_${trades[0]?.id}`;
 
     if (!force && isCacheValid(cached, 24 * 60 * 60 * 1000, contextHash)) {
-      setInsights(cached?.data || {});
-      if (cached?.data[mode]) {
-        setChatHistory([{ role: 'assistant', content: cached.data[mode] }]);
+      const data = cached?.data || {};
+      setInsights(data);
+      if (data[mode]) {
+        setChatHistory(prev => {
+          if (prev.length === 1 && prev[0].content === data[mode]) return prev;
+          return [{ role: 'assistant', content: data[mode] }];
+        });
       }
       return;
     }
@@ -167,7 +174,7 @@ export default function AIInsights() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId, trades, strategies, mode]);
 
   const handleChat = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -203,12 +210,17 @@ export default function AIInsights() {
   };
 
   useEffect(() => {
-    generateInsights();
-  }, [trades.length, userId]);
+    if (trades.length > 0 && userId) {
+      generateInsights();
+    }
+  }, [trades.length, userId, generateInsights]);
 
   useEffect(() => {
     if (insights[mode]) {
-      setChatHistory([{ role: 'assistant', content: insights[mode] }]);
+      setChatHistory(prev => {
+        if (prev.length === 1 && prev[0].content === insights[mode]) return prev;
+        return [{ role: 'assistant', content: insights[mode] }];
+      });
     }
   }, [mode, insights]);
 

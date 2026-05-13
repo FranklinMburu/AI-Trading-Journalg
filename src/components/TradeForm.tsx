@@ -2,9 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { TradeDirection, TradeStatus, Strategy } from '../types';
-import { X, Save, Calculator, Shield } from 'lucide-react';
+import { X, Save, Calculator, Shield, Brain, Sparkles, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { formatCurrency, cn, calculateTradePnL } from '../lib/utils';
 import RiskCalculator from './RiskCalculator';
+import { generateContent, AI_MODELS } from '../services/aiService';
+import Markdown from 'react-markdown';
 
 interface TradeFormProps {
   userId: string;
@@ -16,13 +19,15 @@ interface TradeFormProps {
 import { useAccount } from '../contexts/AccountContext';
 
 export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean; onClose: () => void }) {
-  const { activeAccount, selectedAccountId } = useAccount();
+  const { activeAccount, selectedAccountId, user } = useAccount();
   const userId = activeAccount?.userId;
   const accountId = selectedAccountId;
 
   const [loading, setLoading] = useState(false);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [showRiskCalc, setShowRiskCalc] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     symbol: '',
     accountId: accountId || '',
@@ -136,9 +141,68 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
 
   const visualizer = getVisualizerData();
 
+  const handleGetFeedback = async () => {
+    if (isAnalyzing) return;
+    
+    const { symbol, direction, entryPrice, stopLoss, takeProfit, notes, strategyId } = formData;
+    if (!symbol || !entryPrice || !notes) {
+      alert("Please enter a symbol, entry price, and setup description (in notes) to get feedback.");
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAiFeedback(null);
+
+    const selectedStrategy = strategies.find(s => s.id === strategyId);
+    
+    try {
+      const prompt = `
+        As an expert trading coach, analyze this potential trade setup and provide feedback.
+        
+        Trade Details:
+        - Symbol: ${symbol}
+        - Direction: ${direction}
+        - Entry Price: ${entryPrice}
+        - Stop Loss: ${stopLoss || 'Not set'}
+        - Take Profit: ${takeProfit || 'Not set'}
+        - R:R Ratio: 1:${rrRatio || 'N/A'}
+        
+        Setup Description / Rationale:
+        "${notes}"
+        
+        ${selectedStrategy ? `
+        Selected Strategy: ${selectedStrategy.name}
+        Strategy Rules/Constraints:
+        ${selectedStrategy.rules || 'No specific rules provided.'}
+        ` : 'No specific strategy selected.'}
+        
+        Please evaluate:
+        1. Logical validity of the setup (entry, SL, TP alignment).
+        2. Quality of the rationale (are the reasons technically sound?).
+        3. Alignment with the selected strategy (if applicable).
+        4. Potential risks or things the trader might have missed.
+        
+        Keep the feedback concise, professional, and actionable. Use markdown for formatting.
+      `;
+
+      const response = await generateContent({
+        model: AI_MODELS.FLASH,
+        contents: prompt
+      });
+
+      setAiFeedback(response.text);
+    } catch (error: any) {
+      console.error("AI Feedback error:", error);
+      setAiFeedback("Failed to get AI feedback. Please try again later.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loading || !userId || !accountId) return;
+    const effectiveUserId = user?.uid || userId;
+    if (loading || !effectiveUserId || !accountId) return;
     setLoading(true);
 
     try {
@@ -152,9 +216,9 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
       const entryTime = formData.entryTime ? new Date(formData.entryTime).toISOString() : new Date().toISOString();
       const tags = formData.tags.split(',').map(t => t.trim()).filter(t => t !== '');
 
-      await addDoc(collection(db, 'users', userId, 'accounts', accountId, 'trades'), {
-        userId,
-        accountId: accountId || "Manual",
+      await addDoc(collection(db, 'users', effectiveUserId, 'accounts', accountId, 'trades'), {
+        userId: effectiveUserId,
+        accountId: accountId,
         symbol: formData.symbol.toUpperCase(),
         entryPrice,
         exitPrice,
@@ -444,15 +508,54 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Notes</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Setup Description & Rationale</label>
+                <button
+                  type="button"
+                  onClick={handleGetFeedback}
+                  disabled={isAnalyzing || !formData.notes}
+                  className="flex items-center gap-1.5 rounded-lg bg-indigo-500/10 px-2.5 py-1 text-[10px] font-bold text-indigo-400 hover:bg-indigo-500/20 disabled:opacity-50 transition-all border border-indigo-500/20"
+                >
+                  {isAnalyzing ? <Loader2 size={10} className="animate-spin" /> : <Brain size={10} />}
+                  Get AI Feedback
+                </button>
+              </div>
               <textarea
                 rows={3}
-                placeholder="Trade rationale, emotions, strategy..."
+                placeholder="Describe your entry reasons, indicators, news catalysts, and market context..."
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
               />
             </div>
+
+            <AnimatePresence>
+              {aiFeedback && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 my-2">
+                    <div className="flex items-center gap-2 mb-2 text-indigo-400">
+                      <Sparkles size={14} />
+                      <span className="text-xs font-bold uppercase tracking-wider">AI Coaching Feedback</span>
+                      <button 
+                        type="button"
+                        onClick={() => setAiFeedback(null)}
+                        className="ml-auto text-zinc-500 hover:text-zinc-400"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <div className="markdown-body text-xs leading-relaxed text-zinc-300">
+                      <Markdown>{aiFeedback}</Markdown>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </form>
         </div>
 

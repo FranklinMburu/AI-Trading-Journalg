@@ -110,14 +110,20 @@
   .will-change-transform {
     will-change: transform;
     backface-visibility: hidden;
+    transform: translateZ(0);
   }
   
   .will-change-opacity {
     will-change: opacity;
   }
 
+  /* Prevent layout shift and optimize composite layers */
+  .card, [role="tabpanel"] {
+    contain: layout style;
+  }
+
   .transform-gpu {
-    transform: translate3d(0,0,0);
+    transform: translateZ(0);
   }
 
   /* 3D Cinematic Utilities */

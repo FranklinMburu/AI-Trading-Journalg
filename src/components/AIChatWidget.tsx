@@ -104,20 +104,43 @@ export default function AIChatWidget() {
   }, []);
 
   const getCombinedContext = () => {
-    const globalStr = Object.entries(globalContext)
-      .map(([source, data]) => `[Source: ${source}]\n${data}`)
+    // Collect environmental signals
+    const globalSignals = Object.entries(globalContext)
+      .map(([source, data]) => `[${source.toUpperCase()} SIGNAL]\n${data}`)
       .join('\n\n');
     
+    // Detailed account snapshot
+    const accountState = activeAccount ? `
+[ACTIVE ACCOUNT SNAPSHOT]
+- Account Name: ${activeAccount.name}
+- ID: ${activeAccount.id}
+- Broker: ${activeAccount.broker || 'Manual/External'}
+- Currency: ${activeAccount.currency}
+- Balance: ${activeAccount.balance} (Real-time)
+- Equity: ${activeAccount.equity} (Real-time)
+- Last Sync: ${activeAccount.lastUpdate}
+`.trim() : '[ACCOUNT SIGNAL]\nNo specific account is currently selected. User is looking at aggregate data or doesn\'t have an account yet.';
+
     return `
-      CHAT HISTORY (Short Summary):
-      ${messages.slice(-5).map(m => `${m.role.toUpperCase()}: ${m.content.substring(0, 100)}...`).join('\n')}
+=== nexus intelligence context snapshot ===
 
-      ENVIRONMENTAL CONTEXT (Background Awareness):
-      ${globalStr || 'User is navigating the platform.'}
+USER IDENTITY:
+- Auth ID: ${userId || 'Guest/Syncing'}
+- Account ID: ${accountId || 'Unselected'}
 
-      SPECIFIC QUERY CONTEXT:
-      ${context || 'No specific technical context provided.'}
-    `.trim();
+${accountState}
+
+REAL-TIME SYSTEM SIGNALS:
+${globalSignals || 'User is currently exploring the landing page or main app shell.'}
+
+ACTIVE SESSION CONTEXT:
+${context || 'No deep-dive technical data (like a specific trade or strategy) is currently being scrutinized.'}
+
+CONVERSATION SUMMARY (LATEST):
+${messages.slice(-5).map(m => `${m.role.toUpperCase()}: ${m.content.substring(0, 150)}${m.content.length > 150 ? '...' : ''}`).join('\n')}
+
+=== end context snapshot ===
+`.trim();
   };
 
   const saveMessage = async (role: 'user' | 'assistant', content: string) => {
@@ -165,27 +188,28 @@ export default function AIChatWidget() {
     setLoading(true);
     try {
       const prompt = `
-        You are a helpful and professional AI assistant for "TradeFlow", a next-generation trading journal and performance analysis platform.
-        
-        System Context for this specific encounter:
-        ${getCombinedContext()}
-        ${ctx ? `\nIMMEDIATE ACTON CONTEXT: ${ctx}` : ''}
+You are "Nexus", the advanced Neural Assistant for the TradeFlow ecosystem.
+TradeFlow is a professional-grade trading journal and technical performance analysis platform.
 
-        TradeFlow key features:
-        - AI Performance Engine: Deep psychological and technical insights.
-        - Risk Management: Risk-of-ruin simulations and position sizing.
-        - Strategy Analysis: Identify profitable setups and eliminate leaks.
-        - Security: AES-256 encryption, private AI processing.
-        - Broker Sync: Automated trade importing (via MetaApi).
-        
-        Guidelines:
-        - Be concise and encouraging.
-        - If asked about trading advice, remind them you are an educational tool, not a financial advisor.
-        - Answer questions specifically about TradeFlow's capabilities.
-        - USE THE PROVIDED SYSTEM CONTEXT to answer the user's question accurately.
-        
-        User question: ${msg}
-      `;
+=== OPERATIONAL CONTEXT ===
+${getCombinedContext()}
+${ctx ? `\n[IMMEDIATE DATA SIGNAL]\n${ctx}` : ''}
+
+=== CORE MISSION ===
+Analyze the provided CONTEXT SNAPSHOT, the IMMEDIATE DATA SIGNAL, and the AUTO-MSG to provide hyper-personalized insights.
+
+=== CAPABILITIES & DIRECTIVES ===
+1. CONTEXT AWARENESS: Use the provided signals to understand exactly what trade, strategy, or screen the user is focusing on right now.
+2. ACTIONABLE INSIGHTS: Provide specific, technical feedback based on the data.
+3. LIMITATIONS: Remind users you are an educational AI, not a licensed financial advisor.
+
+=== TONE & STYLE ===
+- Professional, technical, yet accessible.
+- Sharp, data-driven insights.
+- Short and punchy paragraphs.
+
+AUTO-MSG: ${msg}
+`.trim();
 
       const response = await generateContent({
         model: AI_MODELS.FLASH,
@@ -218,27 +242,29 @@ export default function AIChatWidget() {
 
     try {
       const prompt = `
-        You are a helpful and professional AI assistant for "TradeFlow", a next-generation trading journal and performance analysis platform.
-        
-        System Context (Combined Awareness):
-        ${getCombinedContext()}
+You are "Nexus", the advanced Neural Assistant for the TradeFlow ecosystem.
+TradeFlow is a professional-grade trading journal and technical performance analysis platform.
 
-        TradeFlow key features:
-        - AI Performance Engine: Deep psychological and technical insights.
-        - Risk Management: Risk-of-ruin simulations and position sizing.
-        - Strategy Analysis: Identify profitable setups and eliminate leaks.
-        - Security: AES-256 encryption, private AI processing.
-        - Broker Sync: Automated trade importing (via MetaApi).
-        
-        Guidelines:
-        - Be concise and encouraging.
-        - If asked about trading advice, remind them you are an educational tool, not a financial advisor.
-        - Answer questions specifically about TradeFlow's capabilities.
-        - USE THE PROVIDED SYSTEM CONTEXT to answer the user's question accurately.
-        - Acknowledge previous parts of the conversation if relevant (history is provided in context).
-        
-        User question: ${userMessage}
-      `;
+=== OPERATIONAL CONTEXT ===
+${getCombinedContext()}
+
+=== CORE MISSION ===
+Analyze the provided CONTEXT SNAPSHOT and the USER QUESTION to provide hyper-personalized, context-aware assistance.
+
+=== CAPABILITIES & DIRECTIVES ===
+1. CONTEXT AWARENESS: You know exactly what tab the user is on, what account they are using, and their current system status. Mention specific details (e.g., "I see you're currently in the Risk Calculator...") when relevant to build trust and show awareness.
+2. TECHNICAL ANALYSIS: You can explain complex trading concepts, risk management (R:R, Kelly Criterion), and technical setups.
+3. PLATFORM NAVIGATION: Guide users to relevant tools based on their questions (e.g., "You can find your PnL breakdown in the Insights tab").
+4. LIMITATIONS: Remind users you are an educational AI, not a licensed financial advisor. Do not promise guaranteed returns.
+
+=== TONE & STYLE ===
+- Professional, technical, yet accessible.
+- Sharp, data-driven insights.
+- Bullet points for clarity in complex explanations.
+- Short and punchy paragraphs.
+
+USER QUESTION: ${userMessage}
+`.trim();
 
       const response = await generateContent({
         model: AI_MODELS.FLASH,
