@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { collection, query, where, onSnapshot, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, addDoc, updateDoc, doc, setDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, Strategy } from '../types';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
@@ -131,9 +131,10 @@ export default function StrategyAnalysis() {
     setIsSeeding(true);
 
     try {
-      // If no account exists, create one first
+      // If no account exists, create one first or use a deterministic ID for demo
+      const demoAccountDocId = 'DEMO_001';
       if (!effectiveAccountId) {
-        const accRef = await addDoc(collection(db, 'users', effectiveUserId, 'accounts'), {
+        await setDoc(doc(db, 'users', effectiveUserId, 'accounts', demoAccountDocId), {
           userId: effectiveUserId,
           accountNumber: 'DEMO-001',
           name: 'Demo Trading Account',
@@ -144,7 +145,7 @@ export default function StrategyAnalysis() {
           createdAt: new Date().toISOString(),
           lastUpdate: new Date().toISOString()
         });
-        effectiveAccountId = accRef.id;
+        effectiveAccountId = demoAccountDocId;
       }
 
       const response = await generateContent({

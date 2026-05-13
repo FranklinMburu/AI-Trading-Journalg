@@ -145,7 +145,19 @@ async function startServer() {
 
     const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
     console.log(`[Webhook] User: ${idOrEmail}, Items: ${dataToProcess.length}, QueryUID: ${uid}`);
-    if (dataToProcess.length > 0) console.log(`[Webhook] Payload Sample: ${JSON.stringify(dataToProcess[0])}`);
+
+    // Helper to sanitize date strings from MT5/MT4 (yyyy.mm.dd -> yyyy-mm-dd)
+    const sanitizeDate = (dateStr: any) => {
+      if (!dateStr || typeof dateStr !== "string") return new Date().toISOString();
+      try {
+        // Replace dots with hyphens for better JS parsing
+        const cleaned = dateStr.replace(/\./g, "-").replace(" ", "T");
+        const date = new Date(cleaned);
+        return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+      } catch (e) {
+        return new Date().toISOString();
+      }
+    };
 
     const results = [];
     const accountRefs = new Map();
@@ -191,14 +203,14 @@ async function startServer() {
           userId: uid,
           accountId: targetAccountId,
           symbol: item.symbol || "UNKNOWN",
-          entryPrice: item.entryPrice || item.price || 0,
-          exitPrice: item.exitPrice || item.price || 0,
-          quantity: item.quantity || 1,
-          direction: item.direction || "LONG",
-          status: item.status || "CLOSED",
-          pnl: item.pnl || 0,
-          entryTime: item.entryTime || new Date().toISOString(),
-          exitTime: item.exitTime || new Date().toISOString(),
+          entryPrice: parseFloat(item.entryPrice || item.price || 0),
+          exitPrice: parseFloat(item.exitPrice || item.price || 0),
+          quantity: parseFloat(item.quantity || 1),
+          direction: String(item.direction || "LONG").toUpperCase(),
+          status: String(item.status || "CLOSED").toUpperCase(),
+          pnl: parseFloat(item.pnl || 0),
+          entryTime: sanitizeDate(item.entryTime),
+          exitTime: sanitizeDate(item.exitTime),
           notes: item.notes || `Synced via Webhook`,
           tags: item.tags || ["broker-sync"],
           isDemo: String(item.isDemo).toLowerCase() === 'true' || item.isDemo === true 

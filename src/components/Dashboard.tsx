@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, orderBy, onSnapshot, limit, addDoc, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, limit, addDoc, getDocs, setDoc, doc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Trade, UserStats, Strategy, UserSettings } from '../types';
 import { formatCurrency, formatPercent, cn } from '../lib/utils';
@@ -295,9 +295,10 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
     setLoadingEvents(true);
 
     try {
-      // If no account exists, create one first
+      // If no account exists, create one first or use a deterministic ID for demo
+      const demoAccountDocId = 'DEMO_001';
       if (!effectiveAccountId) {
-        const accRef = await addDoc(collection(db, 'users', effectiveUserId, 'accounts'), {
+        await setDoc(doc(db, 'users', effectiveUserId, 'accounts', demoAccountDocId), {
           userId: effectiveUserId,
           accountNumber: 'DEMO-001',
           name: 'Demo Trading Account',
@@ -308,7 +309,7 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
           createdAt: new Date().toISOString(),
           lastUpdate: new Date().toISOString()
         });
-        effectiveAccountId = accRef.id;
+        effectiveAccountId = demoAccountDocId;
       }
 
       const pairs = ['BTC/USD', 'ETH/USD', 'EUR/USD', 'GBP/USD', 'AAPL', 'TSLA'];
