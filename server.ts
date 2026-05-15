@@ -274,7 +274,11 @@ async function startServer() {
       const results = [];
 
       for (const item of dataToProcess) {
-        console.log("[MT5 RAW ITEM]", JSON.stringify(item));
+        // DETAILED LOGGING AS REQUESTED
+        console.log("\n--- INCOMING MT5 PAYLOAD ---");
+        console.log("Body Item:", JSON.stringify(item, null, 2));
+        console.log("Resolved UID:", uid);
+        console.log("Query Params:", req.query);
         
         // STRICT ACCOUNT RESOLUTION
         if (!accountId && !item.accountId) {
@@ -283,26 +287,37 @@ async function startServer() {
         }
 
         const targetAccountId = String(accountId || item.accountId);
-        const accountDocId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
-
-        console.log("[ACCOUNT RESOLUTION]", {
-          queryAccountId: accountId,
-          itemAccountId: item.accountId,
-          finalDocId: accountDocId
-        });
+        console.log("Resolved targetAccountId:", targetAccountId);
         
-        const accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
+        // BETTER ACCOUNT RESOLUTION: Try to find an existing account with this account number first
+        // This prevents "duplicate" accounts if the user manually added one with an auto-generated ID
+        const accountsColRef = db.collection("users").doc(uid).collection("accounts");
+        const existingAccountQuery = await accountsColRef.where("accountNumber", "==", targetAccountId).limit(1).get();
+        
+        let accountRef;
+        if (!existingAccountQuery.empty) {
+          accountRef = existingAccountQuery.docs[0].ref;
+          console.log("[ACCOUNT RESOLUTION] Linked to existing account doc:", accountRef.id);
+        } else {
+          // Fallback to deterministic ID if not found
+          const deterministicId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
+          accountRef = accountsColRef.doc(deterministicId);
+          console.log("[ACCOUNT RESOLUTION] Creating/Using deterministic account doc:", deterministicId);
+        }
+        
+        const accountDocId = accountRef.id;
         const accountDoc = await accountRef.get();
 
         if (!accountDoc.exists) {
-          console.log(`[Webhook] Creating account: ${accountDocId}`);
+          console.log(`[Webhook] Creating NEW account record for: ${accountDocId}`);
           await accountRef.set({
             userId: uid,
             accountNumber: targetAccountId,
-            name: `MT Sync ${targetAccountId}`,
+            name: item.accountName || `MT Sync ${targetAccountId}`,
             currency: item.currency || "USD",
             balance: item.balance || 0,
             equity: item.equity || 0,
+            broker: item.broker || "MetaTrader",
             createdAt: new Date().toISOString(),
             lastUpdate: new Date().toISOString(),
             lastSync: new Date().toISOString()
@@ -316,12 +331,25 @@ async function startServer() {
           });
         }
 
-        const isDemoFlag = String(item.isDemo).toLowerCase() === 'true' || item.isDemo === true;
-        const ticketId = item.ticket ? String(item.ticket) : `m_${Date.now()}`;
+        // REFINED isDemo LOGIC
+        // Logic: payload.isDemo === true || accountType contains "demo"
+        const isDemoFlag = 
+          item.isDemo === true || 
+          String(item.isDemo).toLowerCase() === 'true' ||
+          String(item.accountType || "").toLowerCase().includes("demo") ||
+          String(item.accountName || "").toLowerCase().includes("demo");
 
-        if (ticketId === "0") continue;
+        console.log("Resolved isDemoFlag:", isDemoFlag, "(Raw:", item.isDemo, "Type:", item.accountType, ")");
+
+        const ticketId = item.ticket ? String(item.ticket) : `m_${Date.now()}`;
+        if (ticketId === "0") {
+          console.warn("[WEBHOOK SKIPPED] Ticket is 0 (likely heartbeat or balance operation)");
+          continue;
+        }
 
         const tradeRef = accountRef.collection("trades").doc(ticketId);
+        console.log(`[Webhook] Target Write Path: users/${uid}/accounts/${accountDocId}/trades/${ticketId}`);
+        
         const existingTrade = await tradeRef.get();
         
         const trade = {
@@ -341,13 +369,15 @@ async function startServer() {
         };
 
         if (!existingTrade.exists) {
-          console.log(`[Webhook] WRITING TRADE: ${ticketId}`);
+          console.log(`[Webhook] WRITING NEW TRADE: ${ticketId}`);
           await tradeRef.set(trade);
           results.push(ticketId);
         } else if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
-          console.log(`[Webhook] CLOSING TRADE: ${ticketId}`);
+          console.log(`[Webhook] CLOSING EXISTING TRADE: ${ticketId}`);
           await tradeRef.update(trade);
           results.push(ticketId);
+        } else {
+          console.log(`[Webhook] TRADE EXISTS & UNCHANGED: ${ticketId}`);
         }
       }
       
