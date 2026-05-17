@@ -1031,152 +1031,156 @@ void SendTradeToJournal(ulong ticket) {
         </div>
 
         {/* Recent Webhook Activity diagnostic */}
-        <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2 shadow-inner">
-          <div className="flex items-center gap-2 mb-1">
-            <Activity size={20} className="text-emerald-500" />
-            <h4 className="font-bold">Recent Sync Activity</h4>
-            <button 
-              onClick={async (e) => {
-                const btn = e.currentTarget;
-                const originalText = btn.innerHTML;
-                btn.disabled = true;
-                btn.innerHTML = '<span class="animate-spin mr-1 inline-block">⏳</span> Testing...';
-                
-                try {
-                  console.log("[Connection Test] Initiating fetch...");
-                  const url = `${window.location.origin}/api/webhook/trade?userId=${userId}`;
-                  const res = await fetch(url);
-                  const data = await res.json();
-                  console.log("[Connection Test] Response:", data);
+        <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6 md:col-span-2 shadow-inner">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Activity size={20} className="text-emerald-500" />
+              <h4 className="font-bold text-sm sm:text-base">Recent Sync Activity</h4>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button 
+                onClick={async (e) => {
+                  const btn = e.currentTarget;
+                  const originalText = btn.innerHTML;
+                  btn.disabled = true;
+                  btn.innerHTML = '<span class="animate-spin mr-1 inline-block">⏳</span> Testing...';
                   
-                  if (data.status === 'LISTEN_ACTIVE') {
-                    btn.classList.replace('bg-emerald-500/10', 'bg-emerald-500');
-                    btn.classList.replace('text-emerald-500', 'text-white');
-                    btn.innerHTML = '✅ SUCCESS';
-                  } else {
+                  try {
+                    console.log("[Connection Test] Initiating fetch...");
+                    const url = `${window.location.origin}/api/webhook/trade?userId=${userId}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    console.log("[Connection Test] Response:", data);
+                    
+                    if (data.status === 'LISTEN_ACTIVE') {
+                      btn.classList.replace('bg-emerald-500/10', 'bg-emerald-500');
+                      btn.classList.replace('text-emerald-500', 'text-white');
+                      btn.innerHTML = '✅ SUCCESS';
+                    } else {
+                      btn.classList.replace('bg-emerald-500/10', 'bg-rose-500');
+                      btn.classList.replace('text-emerald-500', 'text-white');
+                      btn.innerHTML = '❌ FAILED';
+                    }
+                  } catch (err) {
+                    console.error("[Connection Test] Error:", err);
                     btn.classList.replace('bg-emerald-500/10', 'bg-rose-500');
                     btn.classList.replace('text-emerald-500', 'text-white');
-                    btn.innerHTML = '❌ FAILED';
-                  }
-                } catch (err) {
-                  console.error("[Connection Test] Error:", err);
-                  btn.classList.replace('bg-emerald-500/10', 'bg-rose-500');
-                  btn.classList.replace('text-emerald-500', 'text-white');
-                  btn.innerHTML = '❌ ERROR';
-                } finally {
-                  setTimeout(() => {
-                    btn.disabled = false;
-                    btn.classList.remove('bg-emerald-500', 'bg-rose-500', 'text-white');
-                    btn.classList.add('bg-emerald-500/10', 'text-emerald-500');
-                    btn.innerHTML = originalText;
-                  }, 3000);
-                }
-              }}
-              className="ml-auto flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-[9px] font-bold text-emerald-500 hover:bg-emerald-500/20 transition-all min-w-[80px] justify-center"
-            >
-              <Zap size={10} />
-              Test Server URL
-            </button>
-            <button 
-              onClick={async (e) => {
-                const btn = e.currentTarget;
-                const originalText = btn.innerHTML;
-                btn.disabled = true;
-                btn.innerHTML = 'Running...';
-                
-                try {
-                  const url = `${window.location.origin}/api/debug/sync?userId=${userId}`;
-                  const res = await fetch(url);
-                  const data = await res.json();
-                  console.log("[Diagnostic Data]", data);
-                  
-                  if (data.error) {
                     btn.innerHTML = '❌ ERROR';
-                    return;
+                  } finally {
+                    setTimeout(() => {
+                      btn.disabled = false;
+                      btn.classList.remove('bg-emerald-500', 'bg-rose-500', 'text-white');
+                      btn.classList.add('bg-emerald-500/10', 'text-emerald-500');
+                      btn.innerHTML = originalText;
+                    }, 3000);
                   }
+                }}
+                className="flex flex-1 sm:flex-none items-center gap-1 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[9px] font-bold text-emerald-500 hover:bg-emerald-500/20 transition-all min-w-[80px] justify-center"
+              >
+                <Zap size={10} />
+                Test Server URL
+              </button>
+              <button 
+                onClick={async (e) => {
+                  const btn = e.currentTarget;
+                  const originalText = btn.innerHTML;
+                  btn.disabled = true;
+                  btn.innerHTML = 'Running...';
+                  
+                  try {
+                    const url = `${window.location.origin}/api/debug/sync?userId=${userId}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    console.log("[Diagnostic Data]", data);
+                    
+                    if (data.error) {
+                      btn.innerHTML = '❌ ERROR';
+                      return;
+                    }
 
-                  const accountStats = data.accounts.map((a: any) => 
-                    `Acc: ${a.id} | Trades: ${a.tradeCount}`
-                  ).join(' | ');
+                    const accountStats = data.accounts.map((a: any) => 
+                      `Acc: ${a.id} | Trades: ${a.tradeCount}`
+                    ).join(' | ');
 
-                  console.log(`Diagnostic Complete: Found: ${data.accountsFound} | ${accountStats}`);
-                  btn.innerHTML = '✅ LOGGED';
-                } catch (e) {
-                  btn.innerHTML = '❌ FAIL';
-                } finally {
-                  setTimeout(() => {
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                  }, 3000);
-                }
-              }}
-              className="ml-2 flex items-center gap-1 rounded-lg bg-blue-500/10 px-2 py-1 text-[9px] font-bold text-blue-500 hover:bg-blue-500/20 transition-all min-w-[70px] justify-center"
-            >
-              <Activity size={10} />
-              Diagnostic Sync
-            </button>
-            <button 
-              onClick={async (e) => {
-                const btn = e.currentTarget;
-                const originalText = btn.innerHTML;
-                btn.disabled = true;
-                btn.innerHTML = 'Writing...';
-                try {
-                  const url = `${window.location.origin}/api/debug/test-write`;
-                  const res = await fetch(url);
-                  const data = await res.json();
-                  if (data.success) {
-                    btn.innerHTML = '✅ OK';
-                    console.log("Admin SDK Write Test: SUCCESS", data.path);
-                  } else {
+                    console.log(`Diagnostic Complete: Found: ${data.accountsFound} | ${accountStats}`);
+                    btn.innerHTML = '✅ LOGGED';
+                  } catch (e) {
                     btn.innerHTML = '❌ FAIL';
-                    console.error("Admin SDK Write Test: FAILED", data.error);
+                  } finally {
+                    setTimeout(() => {
+                      btn.disabled = false;
+                      btn.innerHTML = originalText;
+                    }, 3000);
                   }
-                } catch (e) {
-                  btn.innerHTML = '❌ ERR';
-                } finally {
-                  setTimeout(() => {
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                  }, 2000);
-                }
-              }}
-              className="ml-2 flex items-center gap-1 rounded-lg bg-orange-500/10 px-2 py-1 text-[9px] font-bold text-orange-500 hover:bg-orange-500/20 transition-all min-w-[60px] justify-center"
-            >
-              <Database size={10} />
-              Test Write
-            </button>
-            <button 
-              onClick={async (e) => {
-                const btn = e.currentTarget;
-                const originalText = btn.innerHTML;
-                btn.disabled = true;
-                btn.innerHTML = 'Checking...';
-                try {
-                  const url = `${window.location.origin}/api/debug/auth-check`;
-                  const res = await fetch(url);
-                  const data = await res.json();
-                  if (data.success) {
-                    btn.innerHTML = '✅ AUTH OK';
-                    console.log("Admin SDK Auth: SUCCESS", data.message);
-                  } else {
-                    btn.innerHTML = '❌ AUTH FAIL';
-                    console.error("Admin SDK Auth: FAILED", data.error, data.details);
+                }}
+                className="flex flex-1 sm:flex-none items-center gap-1 rounded-lg bg-blue-500/10 px-2.5 py-1.5 text-[9px] font-bold text-blue-500 hover:bg-blue-500/20 transition-all min-w-[70px] justify-center"
+              >
+                <Activity size={10} />
+                Diagnostic Sync
+              </button>
+              <button 
+                onClick={async (e) => {
+                  const btn = e.currentTarget;
+                  const originalText = btn.innerHTML;
+                  btn.disabled = true;
+                  btn.innerHTML = 'Writing...';
+                  try {
+                    const url = `${window.location.origin}/api/debug/test-write`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (data.success) {
+                      btn.innerHTML = '✅ OK';
+                      console.log("Admin SDK Write Test: SUCCESS", data.path);
+                    } else {
+                      btn.innerHTML = '❌ FAIL';
+                      console.error("Admin SDK Write Test: FAILED", data.error);
+                    }
+                  } catch (e) {
+                    btn.innerHTML = '❌ ERR';
+                  } finally {
+                    setTimeout(() => {
+                      btn.disabled = false;
+                      btn.innerHTML = originalText;
+                    }, 2000);
                   }
-                } catch (e) {
-                  btn.innerHTML = '❌ ERR';
-                } finally {
-                  setTimeout(() => {
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                  }, 2000);
-                }
-              }}
-              className="ml-2 flex items-center gap-1 rounded-lg bg-purple-500/10 px-2 py-1 text-[9px] font-bold text-purple-500 hover:bg-purple-500/20 transition-all min-w-[70px] justify-center"
-            >
-              <ShieldCheck size={10} />
-              Auth Check
-            </button>
+                }}
+                className="flex flex-1 sm:flex-none items-center gap-1 rounded-lg bg-orange-500/10 px-2.5 py-1.5 text-[9px] font-bold text-orange-500 hover:bg-orange-500/20 transition-all min-w-[60px] justify-center"
+              >
+                <Database size={10} />
+                Test Write
+              </button>
+              <button 
+                onClick={async (e) => {
+                  const btn = e.currentTarget;
+                  const originalText = btn.innerHTML;
+                  btn.disabled = true;
+                  btn.innerHTML = 'Checking...';
+                  try {
+                    const url = `${window.location.origin}/api/debug/auth-check`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (data.success) {
+                      btn.innerHTML = '✅ AUTH OK';
+                      console.log("Admin SDK Auth: SUCCESS", data.message);
+                    } else {
+                      btn.innerHTML = '❌ AUTH FAIL';
+                      console.error("Admin SDK Auth: FAILED", data.error, data.details);
+                    }
+                  } catch (e) {
+                    btn.innerHTML = '❌ ERR';
+                  } finally {
+                    setTimeout(() => {
+                      btn.disabled = false;
+                      btn.innerHTML = originalText;
+                    }, 2000);
+                  }
+                }}
+                className="flex flex-1 sm:flex-none items-center gap-1 rounded-lg bg-purple-500/10 px-2.5 py-1.5 text-[9px] font-bold text-purple-500 hover:bg-purple-500/20 transition-all min-w-[70px] justify-center"
+              >
+                <ShieldCheck size={10} />
+                Auth Check
+              </button>
+            </div>
           </div>
           <p className="text-[10px] text-zinc-500 mb-4 px-1">
             <b>Troubleshooting:</b> If "Recent Activity" is empty, ensure you have added <code>{window.location.origin}</code> to MT5 → Tools → Options → Expert Advisors → <b>Allow WebRequest</b>.
@@ -1216,7 +1220,7 @@ void SendTradeToJournal(ulong ticket) {
 
           {/* Raw Server Trace (Global) */}
           <div className="mt-8 pt-8 border-t border-zinc-800">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                <div>
                   <h5 className="text-sm font-bold text-zinc-300 flex items-center gap-2">
                     <Shield size={16} className="text-rose-500" />
@@ -1226,7 +1230,7 @@ void SendTradeToJournal(ulong ticket) {
                </div>
                <button 
                 onClick={fetchServerLogs}
-                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-[10px] font-bold text-zinc-400 hover:text-white"
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-[10px] font-bold text-zinc-400 hover:text-white w-full sm:w-auto"
                >
                  Refresh Trace
                </button>
