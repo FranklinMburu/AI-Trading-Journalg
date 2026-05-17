@@ -239,10 +239,14 @@ export default function StrategyAnalysis() {
   useEffect(() => {
     if (!userId || !accountId) return;
 
-    const q = query(
-      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
-      where('isDemo', '==', isDemoMode)
-    );
+    const q = accountId?.startsWith('DEMO_')
+      ? query(
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+          where('isDemo', '==', isDemoMode)
+        )
+      : query(
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies')
+        );
     return onSnapshot(q, (snapshot) => {
       const sMap = new Map<string, { name: string; createdAt: string; rules: string }>();
       snapshot.docs.forEach(doc => {
@@ -264,10 +268,14 @@ export default function StrategyAnalysis() {
   useEffect(() => {
     if (!userId || !accountId) return;
 
-    const q = query(
-      collection(db, 'users', userId, 'accounts', accountId, 'trades'), 
-      where('isDemo', '==', isDemoMode)
-    );
+    const q = accountId?.startsWith('DEMO_')
+      ? query(
+          collection(db, 'users', userId, 'accounts', accountId, 'trades'), 
+          where('isDemo', '==', isDemoMode)
+        )
+      : query(
+          collection(db, 'users', userId, 'accounts', accountId, 'trades')
+        );
     return onSnapshot(q, (snapshot) => {
       setRawTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trade)));
       setLoading(false);

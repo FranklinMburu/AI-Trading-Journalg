@@ -1,7 +1,21 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+// 4. Load configuration with environment variable fallbacks
+// Using import.meta.glob for a safe, optional import that won't break the build if the file is missing
+const configFiles = (import.meta as any).glob('../firebase-applet-config.json', { eager: true });
+const configPath = '../firebase-applet-config.json';
+const firebaseConfigJSON = (configFiles[configPath] as any)?.default || {};
+
+const firebaseConfig = {
+  apiKey: (import.meta as any).env.VITE_FIREBASE_API_KEY || firebaseConfigJSON.apiKey,
+  authDomain: (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigJSON.authDomain,
+  projectId: (import.meta as any).env.VITE_FIREBASE_PROJECT_ID || firebaseConfigJSON.projectId,
+  storageBucket: (import.meta as any).env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigJSON.storageBucket,
+  messagingSenderId: (import.meta as any).env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigJSON.messagingSenderId,
+  appId: (import.meta as any).env.VITE_FIREBASE_APP_ID || firebaseConfigJSON.appId,
+  firestoreDatabaseId: (import.meta as any).env.VITE_FIREBASE_DATABASE_ID || firebaseConfigJSON.firestoreDatabaseId || "(default)"
+};
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);

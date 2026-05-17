@@ -128,8 +128,24 @@ function getFirebaseAdmin() {
 
 async function startServer() {
   console.log("Initializing Express app...");
+  
+  // SANITY CHECK: Verify required config files
+  const fs = await import('fs');
+  const path = await import('path');
+  const requiredFiles = ['firebase-applet-config.json', 'serviceAccount.json'];
+  
+  console.log("--- Local Config Check ---");
+  requiredFiles.forEach(file => {
+    if (!fs.existsSync(path.join(process.cwd(), file))) {
+      console.warn(`⚠️  WARNING: Missing ${file}. Use README.md to help set this up.`);
+    } else {
+      console.log(`✅ Found ${file}`);
+    }
+  });
+  console.log("--------------------------");
+
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -139,6 +155,7 @@ async function startServer() {
   });
 
   app.get("/api/debug-webhooks", (req, res) => {
+    console.log("[DEBUG] /api/debug-webhooks called. Current buffer size:", logBuffer?.length || 0);
     res.json(logBuffer || []);
   });
 
@@ -221,174 +238,234 @@ async function startServer() {
     });
   });
 
+  // IDENTITY MIGRATION ENDPOINT
+  // Deep copies legacy account docs to deterministic IDs to fix identity fragmentation
+  app.post("/api/admin/migrate-identity", async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    try {
+      const { db } = getFirebaseAdmin();
+      const accountsRef = db.collection("users").doc(userId).collection("accounts");
+      const accountsSnapshot = await accountsRef.get();
+      
+      const migrationResults: any[] = [];
+
+      for (const legacyDoc of accountsSnapshot.docs) {
+        const data = legacyDoc.data();
+        const accountNumber = data.accountNumber || data.id;
+        
+        // Skip internal demos or already deterministic IDs
+        if (legacyDoc.id.startsWith("DEMO_")) continue;
+        const deterministicId = String(accountNumber).replace(/[^a-zA-Z0-9]/g, "_");
+        if (legacyDoc.id === deterministicId) continue;
+
+        console.log(`[MIGRATE] Migrating legacy doc ${legacyDoc.id} -> ${deterministicId}`);
+        const newDocRef = accountsRef.doc(deterministicId);
+        
+        // 1. Copy root account data
+        await newDocRef.set({
+          ...data,
+          updatedAt: FieldValue.serverTimestamp(),
+          migrationSource: legacyDoc.id
+        }, { merge: true });
+
+        // 2. Deep Copy Subcollections (Trades, Strategies, etc.)
+        const subCollections = ["trades", "strategies", "settings", "journal_entries"];
+        for (const collName of subCollections) {
+          const legacySubCol = legacyDoc.ref.collection(collName);
+          const subSnapshot = await legacySubCol.get();
+          
+          if (!subSnapshot.empty) {
+            console.log(`[MIGRATE] Copying ${subSnapshot.size} docs from ${collName}`);
+            const batch = db.batch();
+            subSnapshot.docs.forEach(subDoc => {
+              const targetRef = newDocRef.collection(collName).doc(subDoc.id);
+              batch.set(targetRef, subDoc.data(), { merge: true });
+            });
+            await batch.commit();
+          }
+        }
+
+        // 3. Delete Legacy Doc (and its subcollections effectively by removing root ref in UI)
+        // Note: Real deep deletion in Firestore requires recursive calls, but for this UI, 
+        // removing the root doc is enough to "un-orphan" the identity.
+        await legacyDoc.ref.delete();
+        migrationResults.push({ from: legacyDoc.id, to: deterministicId });
+      }
+
+      res.json({
+        success: true,
+        message: `Migrated ${migrationResults.length} accounts.`,
+        details: migrationResults
+      });
+    } catch (error: any) {
+      console.error("[Migration Error]", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/webhook/trade", async (req, res) => {
-    const { userId: idOrEmail, secret, accountId } = req.query;
-    console.log(`\n[WEBHOOK TRACE] ${new Date().toISOString()}`);
-    console.log(`[Webhook] UserParam: ${idOrEmail} | Admin SDK Mode`);
-    
-    const tradeData = req.body;
-    const dataToProcess = Array.isArray(tradeData) ? tradeData : [tradeData];
-    
-    // Log to buffer for diagnostics
+    // 1. ENTRY CONFIRMATION (Forensic Step 1)
+    const timestamp = new Date().toISOString();
+    const queryUserId = req.query.userId;
+    const queryAccountId = req.query.accountId;
+
+    console.log(`\n--- 🔥 WEBHOOK RECEIVED [${timestamp}] ---`);
+    console.log("[TRACE] Remote IP:", req.ip || req.headers['x-forwarded-for']);
+    console.log("[TRACE] Query Params:", JSON.stringify(req.query));
+    console.log("[TRACE] Payload Name:", req.body?.accountName || "unknown");
+
+    // Add to global memory buffer for `/api/debug-webhooks`
     logBuffer.unshift({
-      time: new Date().toISOString(),
-      type: "WEBHOOK_EVENT",
-      userParam: idOrEmail,
-      queryId: accountId,
-      bodyPreview: dataToProcess.slice(0, 2).map(item => ({ ticket: item.ticket, symbol: item.symbol, account: item.accountId }))
+      time: timestamp,
+      type: "WEBHOOK_ENTRY",
+      query: req.query,
+      bodyType: Array.isArray(req.body) ? "ARRAY" : typeof req.body,
+      bodyPreview: JSON.stringify(req.body).slice(0, 500)
     });
     if (logBuffer.length > 50) logBuffer.pop();
 
-    if (!idOrEmail || idOrEmail === 'PLEASE_LOGIN' || idOrEmail === 'undefined') {
-      return res.status(400).json({ error: "Missing or invalid userId parameter." });
-    }
+    const { userId: idOrEmail, secret } = req.query;
 
     try {
-      const { db, auth } = getFirebaseAdmin();
-      
-      let uid: string;
-      
-      // Resolve email to UID if needed
-      if ((idOrEmail as string).includes("@")) {
-        console.log(`[Webhook] Resolving email: ${idOrEmail}`);
-        const userRecord = await auth.getUserByEmail(idOrEmail as string);
-        uid = userRecord.uid;
-        console.log(`[Webhook] Resolved to UID: ${uid}`);
-      } else {
-        uid = idOrEmail as string;
-      }
-
-      // Log to user-specific diagnostic collection
-      try {
-        await db.collection("users").doc(uid).collection("webhook_logs").add({
-          timestamp: new Date().toISOString(),
-          accountIds: dataToProcess.map(item => String(accountId || item.accountId)),
-          itemCount: dataToProcess.length,
-          status: "SUCCESS",
-          clientIp: req.ip || req.headers['x-forwarded-for'] || "Unknown"
+      // 2. BACKEND PROCESSING (Forensic Step 3)
+      if (!idOrEmail || idOrEmail === "PLEASE_LOGIN" || idOrEmail === "undefined" || idOrEmail === "") {
+        console.error("❌ WEBHOOK ERROR: Incoming request is missing 'userId' in query string.");
+        return res.status(400).json({ 
+          success: false, 
+          stage: "received", 
+          error: "Missing userId query parameter. EA URL might be misconfigured.",
+          receivedQuery: req.query
         });
-      } catch (logErr) {
-        console.error("Failed to write webhook log to Firestore:", logErr);
       }
 
-      const results = [];
+      const { db, auth } = getFirebaseAdmin();
+      let uid: string;
 
-      for (const item of dataToProcess) {
-        // DETAILED LOGGING AS REQUESTED
-        console.log("\n--- INCOMING MT5 PAYLOAD ---");
-        console.log("Body Item:", JSON.stringify(item, null, 2));
-        console.log("Resolved UID:", uid);
-        console.log("Query Params:", req.query);
+      // Identity Resolution
+      try {
+        if ((idOrEmail as string).includes("@")) {
+          console.log(`[TRACE] Resolving email: ${idOrEmail}`);
+          const userRecord = await auth.getUserByEmail(idOrEmail as string);
+          uid = userRecord.uid;
+        } else {
+          uid = idOrEmail as string;
+        }
+        console.log(`[TRACE] Resolved Target UID: ${uid}`);
+      } catch (authErr: any) {
+        console.error("❌ WEBHOOK ERROR: Failed to resolve user identity:", authErr.message);
+        return res.status(404).json({
+          success: false,
+          stage: "parsed",
+          error: `User identity '${idOrEmail}' not found in Firebase Auth.`,
+        });
+      }
+
+      const data = req.body;
+      const items = Array.isArray(data) ? data : [data];
+      const syncResults = [];
+      const diagnosticInfo: any = {
+         receivedCount: items.length,
+         targetUid: uid,
+         userEmail: (idOrEmail as string).includes("@") ? idOrEmail : "via-uid"
+      };
+      
+      if (items.length === 0 || !items[0] || (typeof items[0] === 'object' && Object.keys(items[0]).length === 0)) {
+         console.warn("[TRACE] Webhook received empty or invalid payload.");
+         return res.json({ success: true, message: "No data items to process", ...diagnosticInfo });
+      }
+
+      for (const item of items) {
+        // Fallback Strategy: Check JSON body first, then Query String (for legacy EAs)
+        const rawAccountId = item.accountId || queryAccountId;
+        const ticketId = item.ticket ? String(item.ticket) : (req.query.ticket ? String(req.query.ticket) : null);
         
-        // STRICT ACCOUNT RESOLUTION
-        if (!accountId && !item.accountId) {
-          console.error("[WEBHOOK REJECTED] Missing accountId in both query and body.");
+        console.log(`[TRACE] Item Extraction -> Acc: ${rawAccountId}, Ticket: ${ticketId}`);
+
+        if (!rawAccountId) {
+          console.error("❌ WEBHOOK ERROR: Item missing 'accountId' in both JSON payload and query string.");
+          logBuffer.unshift({ time: new Date().toISOString(), type: "ERROR", msg: "Missing accountId", item });
+          continue;
+        }
+        if (!ticketId || ticketId === "0" || ticketId === "undefined") {
+          console.log("[TRACE] Skipping heartbeat/invalid ticket.");
           continue;
         }
 
-        const targetAccountId = String(accountId || item.accountId);
-        console.log("Resolved targetAccountId:", targetAccountId);
+        // 3. FIRESTORE WRITE VERIFICATION (Forensic Step 4)
+        const mt5Login = String(rawAccountId).trim();
+        const accountDocId = mt5Login.replace(/[^a-zA-Z0-9]/g, "_");
+        const fullPath = `users/${uid}/accounts/${accountDocId}/trades/${ticketId}`;
         
-        // BETTER ACCOUNT RESOLUTION: Try to find an existing account with this account number first
-        // This prevents "duplicate" accounts if the user manually added one with an auto-generated ID
-        const accountsColRef = db.collection("users").doc(uid).collection("accounts");
-        const existingAccountQuery = await accountsColRef.where("accountNumber", "==", targetAccountId).limit(1).get();
-        
-        let accountRef;
-        if (!existingAccountQuery.empty) {
-          accountRef = existingAccountQuery.docs[0].ref;
-          console.log("[ACCOUNT RESOLUTION] Linked to existing account doc:", accountRef.id);
-        } else {
-          // Fallback to deterministic ID if not found
-          const deterministicId = targetAccountId.replace(/[^a-zA-Z0-9]/g, "_");
-          accountRef = accountsColRef.doc(deterministicId);
-          console.log("[ACCOUNT RESOLUTION] Creating/Using deterministic account doc:", deterministicId);
-        }
-        
-        const accountDocId = accountRef.id;
-        const accountDoc = await accountRef.get();
+        console.log(`[TRACE] Target Path: ${fullPath}`);
 
-        if (!accountDoc.exists) {
-          console.log(`[Webhook] Creating NEW account record for: ${accountDocId}`);
-          await accountRef.set({
-            userId: uid,
-            accountNumber: targetAccountId,
-            name: item.accountName || `MT Sync ${targetAccountId}`,
-            currency: item.currency || "USD",
-            balance: item.balance || 0,
-            equity: item.equity || 0,
-            broker: item.broker || "MetaTrader",
-            createdAt: new Date().toISOString(),
-            lastUpdate: new Date().toISOString(),
-            lastSync: new Date().toISOString()
-          });
-        } else {
-          await accountRef.update({
-            lastUpdate: new Date().toISOString(),
-            lastSync: new Date().toISOString(),
-            balance: item.balance ?? accountDoc.data()?.balance,
-            equity: item.equity ?? accountDoc.data()?.equity
-          });
-        }
+        const accountRef = db.collection("users").doc(uid).collection("accounts").doc(accountDocId);
+        const tradeRef = accountRef.collection("trades").doc(ticketId);
 
-        // REFINED isDemo LOGIC
-        // Logic: payload.isDemo === true || accountType contains "demo"
         const isDemoFlag = 
           item.isDemo === true || 
           String(item.isDemo).toLowerCase() === 'true' ||
-          String(item.accountType || "").toLowerCase().includes("demo") ||
-          String(item.accountName || "").toLowerCase().includes("demo");
+          String(item.accountType || "").toLowerCase().includes("demo");
 
-        console.log("Resolved isDemoFlag:", isDemoFlag, "(Raw:", item.isDemo, "Type:", item.accountType, ")");
-
-        const ticketId = item.ticket ? String(item.ticket) : `m_${Date.now()}`;
-        if (ticketId === "0") {
-          console.warn("[WEBHOOK SKIPPED] Ticket is 0 (likely heartbeat or balance operation)");
-          continue;
-        }
-
-        const tradeRef = accountRef.collection("trades").doc(ticketId);
-        console.log(`[Webhook] Target Write Path: users/${uid}/accounts/${accountDocId}/trades/${ticketId}`);
-        
-        const existingTrade = await tradeRef.get();
-        
-        const trade = {
+        const tradeData = {
+          ...item,
+          accountId: mt5Login,
           userId: uid,
-          accountId: accountDocId,
-          symbol: String(item.symbol || "UNKNOWN").toUpperCase(),
-          direction: String(item.direction || "LONG").toUpperCase(),
-          status: String(item.status || "CLOSED").toUpperCase(),
-          entryPrice: Number(item.entryPrice || 0),
-          exitPrice: Number(item.exitPrice || 0),
-          pnl: Number(item.pnl || 0),
-          quantity: Number(item.quantity || 1),
+          updatedAt: FieldValue.serverTimestamp(),
           entryTime: item.entryTime || new Date().toISOString(),
-          exitTime: item.exitTime || new Date().toISOString(),
+          status: item.status || (item.pnl !== undefined ? "CLOSED" : "OPEN"),
           isDemo: isDemoFlag,
-          updatedAt: FieldValue.serverTimestamp()
+          trace_at: timestamp
         };
 
-        if (!existingTrade.exists) {
-          console.log(`[Webhook] WRITING NEW TRADE: ${ticketId}`);
-          await tradeRef.set(trade);
-          results.push(ticketId);
-        } else if (existingTrade.data()?.status === "OPEN" && trade.status === "CLOSED") {
-          console.log(`[Webhook] CLOSING EXISTING TRADE: ${ticketId}`);
-          await tradeRef.update(trade);
-          results.push(ticketId);
-        } else {
-          console.log(`[Webhook] TRADE EXISTS & UNCHANGED: ${ticketId}`);
-        }
+        // Create Account Parent (with logging for Settings UI)
+        await accountRef.set({
+          accountNumber: mt5Login,
+          userId: uid,
+          lastSync: timestamp,
+          lastUpdate: timestamp,
+          name: item.accountName || `MT Sync ${mt5Login}`,
+          currency: item.currency || "USD",
+          balance: item.balance || 0,
+          equity: item.equity || 0,
+          broker: item.broker || "MetaTrader",
+          isDemo: isDemoFlag
+        }, { merge: true });
+
+        // User activity log for Settings.tsx
+        await db.collection("users").doc(uid).collection("webhook_logs").add({
+          timestamp,
+          accountIds: [mt5Login],
+          itemCount: 1,
+          status: "SUCCESS",
+          clientIp: req.ip || req.headers['x-forwarded-for'] || "MT5"
+        });
+
+        // Write Trade
+        await tradeRef.set(tradeData, { merge: true });
+        console.log(`✅ FIRESTORE WRITE SUCCESS: ${fullPath}`);
+        syncResults.push({ ticket: ticketId, path: fullPath });
       }
-      
-      res.json({ 
-        success: true, 
-        message: `${results.length} trade(s) synced.`,
-        ids: results
+
+      // 4. RESPONSE CONTRACT
+      return res.json({
+        success: true,
+        stage: "written",
+        uid: uid,
+        accountDocId: items[0] ? String(items[0].accountId).replace(/[^a-zA-Z0-9]/g, "_") : "none",
+        count: syncResults.length,
+        results: syncResults
       });
+
     } catch (error: any) {
-      console.error("Webhook error:", error);
-      res.status(500).json({ error: error.message });
+      console.error("❌ WEBHOOK CRITICAL ERROR:", error);
+      return res.status(500).json({
+        success: false,
+        stage: "failed",
+        error: error.message,
+        stack: error.stack?.split('\n').slice(0, 3)
+      });
     }
   });
 

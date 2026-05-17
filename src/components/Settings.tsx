@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot, writeBatch, deleteDoc, orderBy, setDoc, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { UserSettings, TradingAccount } from '../types';
-import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, RefreshCw, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X, Lock, Key, Activity, Clock, Zap, ShieldCheck } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Target, DollarSign, RefreshCw, Globe, Shield, Smartphone, User as UserIcon, Camera, Mail, Trash2, AlertTriangle, Database, Edit2, Plus, X, Lock, Key, Activity, Clock, Zap, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth } from '../firebase';
 import { format } from 'date-fns';
@@ -28,13 +28,115 @@ export default function Settings() {
     const logsQuery = query(
       collection(db, 'users', userId, 'webhook_logs'),
       orderBy('timestamp', 'desc'),
-      limit(5)
+      limit(10)
     );
     return onSnapshot(logsQuery, (snapshot) => {
       setWebhookLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoadingLogs(false);
     }, () => setLoadingLogs(false));
   }, [userId]);
+
+  const [isTesting, setIsTesting] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const migrateIdentity = async () => {
+    if (!userId || !confirm("This will consolidate all your trades under deterministic MT5 Login IDs. Continue?")) return;
+    setIsMigrating(true);
+    try {
+      const res = await fetch('/api/admin/migrate-identity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ Migration Complete: ${data.message}`);
+        window.location.reload();
+      } else {
+        alert(`❌ Migration Failed: ${data.error}`);
+      }
+    } catch (e: any) {
+      alert(`❌ Error: ${e.message}`);
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  const testWebhook = async () => {
+    setIsTesting(true);
+    try {
+      const testPayload = {
+        ticket: "TEST_" + Date.now(),
+        symbol: "DIAGNOSTIC",
+        direction: "LONG",
+        entryPrice: 1.2345,
+        pnl: 0,
+        status: "OPEN",
+        accountNumber: "999999",
+        accountName: "Self-Test Account"
+      };
+      const res = await fetch(`/api/webhook/trade?userId=${userId}&accountId=999999`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testPayload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ Test Success!\n\nTarget UID: ${data.uid}\nAccount: ${data.accountDocId}\n\nCheck your dashboard for Account #999999.`);
+      } else {
+        alert(`❌ Test Failed: ${data.error}`);
+      }
+    } catch (e: any) {
+      alert(`❌ Error: ${e.message}`);
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const [serverLogs, setServerLogs] = useState<any[]>([]);
+  const [loadingServerLogs, setLoadingServerLogs] = useState(false);
+
+  const fetchServerLogs = async () => {
+    setLoadingServerLogs(true);
+    try {
+      const res = await fetch('/api/debug-webhooks');
+      
+      // Check if response is JSON
+      const contentType = res.headers.get('content-type');
+      if (!res.ok || !contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        console.warn("Server returned non-JSON response for debug-webhooks:", text.slice(0, 500));
+        
+        // If it looks like the AI Studio cookie check page
+        if (text.includes('Cookie check') || text.includes('security cookie')) {
+          setServerLogs([{ 
+            time: new Date().toISOString(), 
+            type: 'PERMISSION_REQUIRED', 
+            bodyPreview: 'AI Studio Security Barrier: Please click the "Open in new tab" or "Grant Permission" button in the preview top bar to allow API requests.' 
+          }]);
+          return;
+        }
+        throw new Error(`Server returned ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      setServerLogs(data);
+    } catch (e: any) {
+      console.error("Failed to fetch server logs", e);
+      setServerLogs([{ 
+        time: new Date().toISOString(), 
+        type: 'FETCH_ERROR', 
+        bodyPreview: e.message || 'Check console for details.' 
+      }]);
+    } finally {
+      setLoadingServerLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchServerLogs();
+    const interval = setInterval(fetchServerLogs, 10000); // Auto refresh every 10s
+    return () => clearInterval(interval);
+  }, []);
   const [userSettings, setUserSettings] = useState<UserSettings>({
     userId: userId || '',
     currency: 'USD',
@@ -53,6 +155,23 @@ export default function Settings() {
   const [newAccountName, setNewAccountName] = useState('');
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [newAccData, setNewAccData] = useState({ accountNumber: '', name: '', currency: 'USD', broker: '' });
+  const [legacyAccounts, setLegacyAccounts] = useState<TradingAccount[]>([]);
+
+  useEffect(() => {
+    if (!userId) return;
+    // Rule 3: Detect legacy/duplicate accounts for cleanup
+    const q = query(collection(db, 'users', userId, 'accounts'));
+    return onSnapshot(q, (snapshot) => {
+      const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradingAccount));
+      const legacy = all.filter(acc => {
+        if (acc.id.startsWith('DEMO_')) return false;
+        if (!acc.accountNumber) return true; 
+        const deterministicId = acc.accountNumber.replace(/[^a-zA-Z0-9]/g, "_");
+        return acc.id !== deterministicId;
+      });
+      setLegacyAccounts(legacy);
+    });
+  }, [userId]);
 
   useEffect(() => {
     if (!userId || !accountId) return;
@@ -109,6 +228,38 @@ export default function Settings() {
       setNewAccData({ accountNumber: '', name: '', currency: 'USD', broker: '' });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'accounts');
+    }
+  };
+
+  const handleCleanupLegacy = async () => {
+    if (!userId || legacyAccounts.length === 0) return;
+    
+    // Updated message for Migrate & Merge
+    const msg = `IDENTITY CONSOLIDATION: We detected ${legacyAccounts.length} legacy account document(s).\n\nAction: We will MIGRATE and MERGE all trades, strategies, and settings from the legacy IDs into your active deterministic IDs.\n\nBenefits:\n- Fixes 'stuck' trades\n- Cleans up duplicate UI entries\n- Restores 1:1 Identity Sync\n\nProceed with deep migration?`;
+    if (!window.confirm(msg)) return;
+    
+    setSaving(true);
+    try {
+      console.log("[IDENTITY MIGRATION] Starting server-side merge...");
+      const response = await fetch('/api/admin/migrate-identity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        alert(`Success! Consolidated ${result.details.length} accounts. Your trading history is now merged into a single identity.`);
+      } else {
+        throw new Error(result.error || 'Identity migration failed');
+      }
+    } catch (error) {
+       console.error("[Migration Failure]", error);
+       handleFirestoreError(error, OperationType.WRITE, 'identity_migration');
+       alert('Migration failed. Please try again or check logs.');
+    } finally {
+       setSaving(false);
     }
   };
 
@@ -344,8 +495,14 @@ void SendTradeToJournal(ulong ticket) {
    string headers = "Content-Type: application/json\\r\\n";
    string responseHeaders;
    int res = WebRequest("POST", finalUrl, headers, 10000, post, result, responseHeaders);
-   if(res == 200) Print("TradeFlow: Sync success for ticket ", ticket);
-   else Print("TradeFlow: Sync failed for ticket ", ticket, " Error: ", GetLastError());
+   
+   string resBody = CharArrayToString(result);
+   Print("TradeFlow: HTTP ", res, " Response: ", resBody);
+
+   if(res == 200 && StringFind(resBody, "\"success\":true") >= 0) 
+      Print("TradeFlow: Sync success for ticket ", ticket);
+   else 
+      Print("TradeFlow: Sync FAILED for ticket ", ticket, ". Check Webhook URL and Server Logs.");
 }`;
 
   return (
@@ -405,14 +562,40 @@ void SendTradeToJournal(ulong ticket) {
               <Database size={20} />
               <h4 className="font-bold">Managed Accounts</h4>
             </div>
-            <button 
-              onClick={() => setIsAddingAccount(!isAddingAccount)}
-              className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-500 hover:bg-emerald-500/20"
-            >
-              {isAddingAccount ? <X size={14} /> : <Plus size={14} />}
-              {isAddingAccount ? 'Cancel' : 'Add Account'}
-            </button>
+            <div className="flex items-center gap-2">
+               {legacyAccounts.length > 0 && (
+                 <button
+                  onClick={handleCleanupLegacy}
+                  className="flex items-center gap-2 rounded-lg bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/20"
+                  title="Detect and remove duplicate/legacy account documents"
+                 >
+                   <ShieldAlert size={14} />
+                   Cleanup Legacy ({legacyAccounts.length})
+                 </button>
+               )}
+              <button 
+                onClick={() => setIsAddingAccount(!isAddingAccount)}
+                className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-500 hover:bg-emerald-500/20"
+              >
+                {isAddingAccount ? <X size={14} /> : <Plus size={14} />}
+                {isAddingAccount ? 'Cancel' : 'Add Account'}
+              </button>
+            </div>
           </div>
+
+          {legacyAccounts.length > 0 && (
+            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 mb-4">
+              <div className="flex items-center gap-2 text-rose-500 mb-1">
+                <AlertTriangle size={16} />
+                <p className="text-xs font-bold uppercase tracking-wider">Identity Fragmentation Detected</p>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                We found <b>{legacyAccounts.length}</b> account doc(s) using legacy random IDs. 
+                These are likely duplicates of your active accounts and are causing "split brain" issues where trades exist but don't show up.
+                Use the <b>Cleanup</b> button to restore a 1:1 sync mapping.
+              </p>
+            </div>
+          )}
 
           {isAddingAccount && (
             <div className="grid grid-cols-1 gap-4 rounded-xl border border-zinc-800 bg-zinc-950 p-4 sm:grid-cols-4">
@@ -687,18 +870,32 @@ void SendTradeToJournal(ulong ticket) {
                 "rounded-xl border p-4 transition-all",
                 userId ? "border-emerald-500/20 bg-emerald-500/5" : "border-zinc-800 bg-zinc-900/50 opacity-50 grayscale pointer-events-none"
               )}>
-                <p className="text-[10px] font-bold uppercase text-emerald-500 mb-1">Your Base Webhook URL:</p>
-                <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
-                  <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
-                    {window.location.origin}/api/webhook/trade?userId={userId || 'auth_token_missing'}{userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}
-                  </code>
-                  <button 
-                    disabled={!userId}
-                    onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}${userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}`)}
-                    className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500 disabled:opacity-30"
-                  >
-                    Copy
-                  </button>
+                <p className="text-[10px] font-bold uppercase text-emerald-500 mb-1">Your Webhook Credentials:</p>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
+                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase">UID:</span>
+                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
+                      {userId}
+                    </code>
+                    <button 
+                      onClick={() => navigator.clipboard.writeText(userId || '')}
+                      className="text-[9px] font-bold text-zinc-600 hover:text-emerald-500"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
+                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase">URL:</span>
+                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
+                      {window.location.origin}/api/webhook/trade?userId={userId}
+                    </code>
+                    <button 
+                      onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}${userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}`)}
+                      className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500"
+                    >
+                      Copy Url
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-2 text-[8px] text-zinc-500 italic">* The EA will automatically append &accountId=[AccountNo] to distinguish your accounts.</p>
               </div>
@@ -996,10 +1193,10 @@ void SendTradeToJournal(ulong ticket) {
                     )} />
                     <div>
                       <p className="text-[10px] font-bold text-zinc-200">
-                         Request processed for account(s): {log.accountIds?.join(', ') || 'Unknown'}
+                        Processed: {log.accountIds?.join(', ') || 'Unknown'} ({log.itemCount || 1} items)
                       </p>
                       <p className="text-[9px] text-zinc-500">
-                        {log.itemCount || log.payloadSize || 0} trade items received • Source: {log.clientIp || log.ip || 'Remote MT5'}
+                        Status: {log.status} • IP: {log.clientIp || "MT5 Connector"}
                       </p>
                     </div>
                   </div>
@@ -1011,10 +1208,70 @@ void SendTradeToJournal(ulong ticket) {
             ) : (
               <div className="flex flex-col items-center justify-center py-6 text-center rounded-xl bg-zinc-900/20 border border-dashed border-zinc-800">
                 <Clock size={24} className="text-zinc-700 mb-2" />
-                <p className="text-xs text-zinc-500">No sync activity detected in this session yet.</p>
-                <p className="text-[10px] text-zinc-600 mt-1 max-w-[200px]">Once you attach the EA in MT5 and a trade closes, it will appear here instantly.</p>
+                <p className="text-xs text-zinc-500">No recent sync logs found.</p>
               </div>
             )}
+          </div>
+
+          {/* Raw Server Trace (Global) */}
+          <div className="mt-8 pt-8 border-t border-zinc-800">
+            <div className="flex items-center justify-between mb-4">
+               <div>
+                  <h5 className="text-sm font-bold text-zinc-300 flex items-center gap-2">
+                    <Shield size={16} className="text-rose-500" />
+                    Forensic Server Console (Debugging Only)
+                  </h5>
+                  <p className="text-[10px] text-zinc-500">Live view of raw global webhook traffic to find 'stuck' connections.</p>
+               </div>
+               <button 
+                onClick={fetchServerLogs}
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-[10px] font-bold text-zinc-400 hover:text-white"
+               >
+                 Refresh Trace
+               </button>
+            </div>
+            <div className="rounded-xl bg-black border border-zinc-800 p-4 font-mono text-[9px] overflow-x-auto">
+               <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                 {serverLogs.map((log, idx) => (
+                   <div key={idx} className="pb-1 border-b border-zinc-900 last:border-0">
+                     <span className="text-blue-500">[{log.time ? format(new Date(log.time), 'HH:mm:ss') : ''}]</span>
+                     <span className="text-emerald-500 ml-2">[{log.type}]</span>
+                     <span className="text-zinc-400 ml-2">UID: {log.query?.userId || 'N/A'}</span>
+                     <span className="text-zinc-400 ml-2">Params: {JSON.stringify(log.query)}</span>
+                     <div className="text-zinc-600 mt-0.5 break-all">Payload: {log.bodyPreview}</div>
+                   </div>
+                 ))}
+                 {serverLogs.length === 0 && <div className="text-zinc-600 italic">No global traffic detected...</div>}
+               </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3">
+               <button 
+                onClick={testWebhook}
+                disabled={isTesting}
+                className="flex items-center justify-center gap-2 rounded-xl bg-blue-500/10 border border-blue-500/20 px-4 py-3 text-xs font-bold text-blue-500 transition-all hover:bg-blue-500/20 disabled:opacity-50"
+               >
+                 {isTesting ? <RefreshCw className="h-4 w-4 animate-spin font-sans" /> : <Zap size={14} />}
+                 Test Webhook Connectivity (Send Dummy Trade)
+               </button>
+               <p className="text-[10px] text-zinc-500 text-center px-4">
+                 Pushing this will simulate an MT5 trade for your current account (ID: 999999). If it works, the "nothing syncing" issue is likely in your MT5 EA config (Check Experts tab in MT5).
+               </p>
+               
+               <div className="h-px bg-zinc-800 my-2" />
+
+               <button 
+                onClick={migrateIdentity}
+                disabled={isMigrating}
+                className="flex items-center justify-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-xs font-bold text-amber-500 transition-all hover:bg-amber-500/20 disabled:opacity-50"
+               >
+                 {isMigrating ? <RefreshCw className="h-4 w-4 animate-spin font-sans" /> : <Database size={14} />}
+                 Force Identity Discover & Consolidate
+               </button>
+               <p className="text-[10px] text-zinc-400 text-center px-4 italic">
+                 Use this if your dashboard is missing accounts that you see in the "Recent Activity" list below.
+               </p>
+            </div>
           </div>
         </div>
 

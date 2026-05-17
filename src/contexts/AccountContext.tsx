@@ -106,6 +106,14 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [user, accounts.length]);
 
+  /* Auto-switching disabled for forensic debugging */
+  /*
+  useEffect(() => {
+    if (isLoading || accounts.length === 0) return;
+    ...
+  }, [isDemoMode, accounts.length, isLoading]);
+  */
+
   useEffect(() => {
     if (!user) return;
 
@@ -115,24 +123,28 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const q = query(accountsRef, orderBy('lastUpdate', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const accList = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradingAccount));
-      setAccounts(accList);
+      const allDocs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradingAccount));
       
-      // Select the most appropriate account
+      // Forensic Debugging: Temporarily show ALL account documents to find missing MT5 syncs
+      console.log("[AccountContext] Raw Firestore Account Docs:", allDocs.map(a => ({ id: a.id, acc: a.accountNumber })));
+      const validAccounts = allDocs;
+
+      setAccounts(validAccounts);
+      
+    // Select the most appropriate account
       setSelectedAccountId(prev => {
-        console.log("[AccountContext] Available docs:", accList.map(a => a.id).join(', '));
-        // 1. If we have no selection PREVIOUSLY, or our previous selection is MISSING from accounts,
-        // or we are on a generic 'DEMO_001' and a real sync account just appeared:
-        const hasRealAccount = accList.some(a => a.accountNumber && !a.id.includes('DEMO'));
-        const currentIsGeneric = prev === 'DEMO_001' || !prev;
+        console.log("[AccountContext] Accounts Visible:", validAccounts.map(a => `${a.id} (Number: ${a.accountNumber})`).join(', '));
         
-        if (accList.length > 0 && (currentIsGeneric || !accList.find(a => a.id === prev))) {
-          // If a real account exists and we're on demo/none, prefer the real one
-          const preferredAccount = accList.find(a => !a.id.includes('DEMO')) || accList[0];
-          localStorage.setItem('tradeflow_selected_account', preferredAccount.id);
-          return preferredAccount.id;
-        }
-        return prev;
+        if (validAccounts.length === 0) return null;
+
+        // If we already have a selection, keep it (Forensic Debugging: Stop switching away)
+        const currentAcc = validAccounts.find(a => a.id === prev);
+        if (currentAcc) return prev;
+
+        // Otherwise, first available account
+        const preferredAccount = validAccounts[0];
+        localStorage.setItem('tradeflow_selected_account', preferredAccount.id);
+        return preferredAccount.id;
       });
       setIsLoading(false);
     }, (error) => {
@@ -141,7 +153,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     });
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, isDemoMode]);
 
   const handleSetSelectedAccountId = React.useCallback((id: string | null) => {
     setSelectedAccountId(id);

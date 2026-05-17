@@ -394,14 +394,20 @@ export default function App() {
                 >
                   {accounts.map(acc => (
                     <option key={acc.id} value={acc.id} className="bg-zinc-900 text-zinc-100">
-                      {acc.name} {accountsWithTrades.includes(acc.id) ? '•' : ''} ({acc.currency})
+                      {acc.id === acc.accountNumber ? `${acc.name} (#${acc.id})` : `${acc.name} (${acc.id})`} {accountsWithTrades.includes(acc.id) ? '•' : ''}
                     </option>
                   ))}
                 </select>
+                
+                {/* Sync Light */}
+                <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-zinc-800">
+                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+                   <span className="text-[9px] font-bold text-emerald-500/80 uppercase tracking-tighter">Live</span>
+                </div>
 
                 {/* Quick Warning if current account has no trades but others do */}
                 {(!selectedAccountId || !accountsWithTrades.includes(selectedAccountId)) && accountsWithTrades.length > 0 && (
-                   <div className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] text-zinc-950 animate-pulse border-2 border-zinc-950" title="Trades detected in other accounts!">
+                   <div className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] text-zinc-950 animate-bounce border-2 border-zinc-950 shadow-lg" title="Trades detected in other accounts!">
                      !
                    </div>
                 )}

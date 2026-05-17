@@ -197,10 +197,14 @@ export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: 
       handleFirestoreError(error, OperationType.LIST, 'settings');
     });
 
-    const strategiesQuery = query(
-      collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
-      where('isDemo', '==', isDemoMode)
-    );
+    const strategiesQuery = accountId?.startsWith('DEMO_')
+      ? query(
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+          where('isDemo', '==', isDemoMode)
+        )
+      : query(
+          collection(db, 'users', userId, 'accounts', accountId, 'strategies')
+        );
     const unsubscribeStrategies = onSnapshot(strategiesQuery, (snapshot) => {
       const sMap = new Map<string, string>();
       snapshot.docs.forEach(doc => sMap.set(doc.id, (doc.data() as Strategy).name));
@@ -211,9 +215,8 @@ export default function TradeList({ isDemoMode, onJournalTrade }: { isDemoMode: 
 
     const tradesQuery = query(
       collection(db, 'users', userId, 'accounts', accountId, 'trades'),
-      where('isDemo', '==', isDemoMode),
       orderBy('entryTime', 'desc'),
-      limit(100)
+      limit(200)
     );
 
     const unsubscribeTrades = onSnapshot(tradesQuery, (snapshot) => {

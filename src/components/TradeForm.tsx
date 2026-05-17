@@ -49,10 +49,14 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
 
     const fetchStrategies = async () => {
       try {
-        const q = query(
-          collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
-          where('isDemo', '==', isDemoMode)
-        );
+        const q = accountId?.startsWith('DEMO_')
+          ? query(
+              collection(db, 'users', userId, 'accounts', accountId, 'strategies'), 
+              where('isDemo', '==', isDemoMode)
+            )
+          : query(
+              collection(db, 'users', userId, 'accounts', accountId, 'strategies')
+            );
         const snapshot = await getDocs(q);
         setStrategies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Strategy)));
       } catch (error) {

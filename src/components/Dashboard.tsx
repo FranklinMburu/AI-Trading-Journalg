@@ -93,7 +93,6 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
 
     const tradesQuery = query(
       collection(db, 'users', userId, 'accounts', accountId, 'trades'),
-      where('isDemo', '==', isDemoMode),
       orderBy('entryTime', 'desc'),
       limit(50)
     );
