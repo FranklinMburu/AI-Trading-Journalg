@@ -8,6 +8,7 @@ import { auth } from '../firebase';
 import { format } from 'date-fns';
 
 import { useAccount } from '../contexts/AccountContext';
+import Dropdown from './Dropdown';
 
 export default function Settings() {
   const { activeAccount, userAccounts, selectedAccountId, isDemoMode, user: contextUser } = useAccount();
@@ -507,20 +508,20 @@ void SendTradeToJournal(ulong ticket) {
 
   return (
     <div className="max-w-4xl space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500">
             <SettingsIcon size={24} />
           </div>
           <div>
-            <h3 className="text-xl font-bold">Platform Settings</h3>
-            <p className="text-sm text-zinc-400">Manage your trading preferences and goals</p>
+            <h3 className="text-lg sm:text-xl font-bold">Platform Settings</h3>
+            <p className="text-xs sm:text-sm text-zinc-400">Manage trading preferences</p>
           </div>
         </div>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition-all hover:bg-blue-500 active:scale-95 disabled:opacity-50"
+          className="flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition-all hover:bg-blue-500 active:scale-95 disabled:opacity-50"
         >
           {saving ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" /> : <Save size={18} />}
           Save Changes
@@ -557,16 +558,16 @@ void SendTradeToJournal(ulong ticket) {
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {/* Trading Accounts */}
         <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 md:col-span-2">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-emerald-500">
               <Database size={20} />
               <h4 className="font-bold">Managed Accounts</h4>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
                {legacyAccounts.length > 0 && (
                  <button
                   onClick={handleCleanupLegacy}
-                  className="flex items-center gap-2 rounded-lg bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/20"
+                  className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-rose-500/10 px-3 py-1.5 text-[10px] sm:text-xs font-bold text-rose-500 hover:bg-rose-500/20"
                   title="Detect and remove duplicate/legacy account documents"
                  >
                    <ShieldAlert size={14} />
@@ -575,7 +576,7 @@ void SendTradeToJournal(ulong ticket) {
                )}
               <button 
                 onClick={() => setIsAddingAccount(!isAddingAccount)}
-                className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-500 hover:bg-emerald-500/20"
+                className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-[10px] sm:text-xs font-bold text-emerald-500 hover:bg-emerald-500/20"
               >
                 {isAddingAccount ? <X size={14} /> : <Plus size={14} />}
                 {isAddingAccount ? 'Cancel' : 'Add Account'}
@@ -735,17 +736,17 @@ void SendTradeToJournal(ulong ticket) {
               </div>
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-zinc-500">Base Currency</label>
-              <select
+              <Dropdown
+                label="Base Currency"
+                options={[
+                  { id: 'USD', label: 'USD ($)' },
+                  { id: 'EUR', label: 'EUR (€)' },
+                  { id: 'GBP', label: 'GBP (£)' },
+                  { id: 'JPY', label: 'JPY (¥)' }
+                ]}
                 value={userSettings.currency}
-                onChange={(e) => setUserSettings({ ...userSettings, currency: e.target.value })}
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                <option value="USD">USD ($)</option>
-                <option value="EUR">EUR (€)</option>
-                <option value="GBP">GBP (£)</option>
-                <option value="JPY">JPY (¥)</option>
-              </select>
+                onChange={(v) => setUserSettings({ ...userSettings, currency: v })}
+              />
             </div>
           </div>
         </div>
@@ -872,28 +873,28 @@ void SendTradeToJournal(ulong ticket) {
               )}>
                 <p className="text-[10px] font-bold uppercase text-emerald-500 mb-1">Your Webhook Credentials:</p>
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
-                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase">UID:</span>
-                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 rounded bg-zinc-950 p-2">
+                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase shrink-0">UID:</span>
+                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400 bg-zinc-900 px-1.5 py-0.5 rounded">
                       {userId}
                     </code>
                     <button 
                       onClick={() => navigator.clipboard.writeText(userId || '')}
-                      className="text-[9px] font-bold text-zinc-600 hover:text-emerald-500"
+                      className="text-[10px] font-bold text-zinc-600 hover:text-emerald-500 px-2 py-1 bg-zinc-900 sm:bg-transparent rounded"
                     >
                       Copy
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 rounded bg-zinc-950 p-2">
-                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase">URL:</span>
-                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 rounded bg-zinc-950 p-2">
+                    <span className="text-[8px] text-zinc-500 w-12 font-bold uppercase shrink-0">URL:</span>
+                    <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-emerald-400 bg-zinc-900 px-1.5 py-0.5 rounded">
                       {window.location.origin}/api/webhook/trade?userId={userId}
                     </code>
                     <button 
                       onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhook/trade?userId=${userId}${userSettings.webhookSecret ? `&secret=${userSettings.webhookSecret}` : ''}`)}
-                      className="text-[10px] font-bold text-zinc-500 hover:text-emerald-500"
+                      className="text-[10px] font-bold text-zinc-600 hover:text-emerald-500 px-2 py-1 bg-zinc-900 sm:bg-transparent rounded"
                     >
-                      Copy Url
+                      Copy
                     </button>
                   </div>
                 </div>

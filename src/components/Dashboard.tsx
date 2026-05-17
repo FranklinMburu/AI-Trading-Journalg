@@ -10,6 +10,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { generateContent, getCache, setCache, isCacheValid, AI_MODELS } from '../services/aiService';
 
 import { useAccount } from '../contexts/AccountContext';
+import Dropdown from './Dropdown';
 
 export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode: boolean; onOpenTradeForm?: () => void }) {
   const { activeAccount, selectedAccountId, user, accounts, accountsWithTrades, setSelectedAccountId } = useAccount();
@@ -424,32 +425,41 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
       {activeAccount && (
         <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4 sm:p-6 animate-in fade-in duration-500">
            <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
               <RefreshCw size={20} className={cn((activeAccount.lastSync) && "animate-spin-slow")} />
             </div>
-            <div className="flex-1 min-w-[200px]">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Sync Status</span>
+            <div className="flex-1 min-w-[150px]">
+              <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+                <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-wider text-zinc-500">Sync Status</span>
                 {activeAccount.lastSync ? (
-                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500">
-                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    CONNECTED • Account #{activeAccount.accountNumber}
+                  <span className="flex items-center gap-1.5 text-[9px] sm:text-[10px] font-bold text-emerald-500">
+                    <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+                    CONNECTED 
+                    <span className="hidden sm:inline opacity-50">•</span>
+                    <span className="hidden xs:inline">#{activeAccount.accountNumber}</span>
                   </span>
                 ) : (
-                  <span className="text-[10px] font-bold text-zinc-500 italic">No Sync Detected</span>
+                  <span className="text-[9px] sm:text-[10px] font-bold text-zinc-500 italic">No Sync Detected</span>
                 )}
               </div>
-              <p className="text-sm font-medium text-zinc-100">
+              <p className="text-xs sm:text-sm font-medium text-zinc-100 truncate">
                 {activeAccount.lastSync 
                   ? `Authenticated & Active` 
                   : "Sync EA Required"}
               </p>
             </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[10px] font-bold text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-100 active:scale-95"
+            >
+              <RefreshCw size={12} />
+              Refresh Sync
+            </button>
           </div>
 
           {/* Webhook Activity Feed (The "Connection" evidence) */}
           <div className="space-y-2 border-t border-zinc-800/50 pt-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Terminal Sync Logs</span>
               {(persistentLogs.length > 0 || recentWebhooks.length > 0) && (
                  <span className="text-[9px] text-emerald-500/70 font-mono italic">real-time monitoring active</span>
@@ -459,13 +469,15 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
             {persistentLogs.length > 0 ? (
               <div className="space-y-1.5 text-[11px] font-mono">
                 {persistentLogs.map((log, i) => (
-                  <div key={i} className="flex items-center gap-3 rounded bg-black/20 p-2 text-emerald-400 border-l border-emerald-500">
-                    <span className="text-emerald-500/50">[{log.timestamp?.split('T')[1]?.split('.')[0]}]</span>
-                    <span className="truncate">SUCCESS: Data packet received from MetaTrader</span>
-                    <span className="ml-auto rounded bg-zinc-800 px-1 text-[9px] text-zinc-400">
-                      {log.itemCount} items
-                    </span>
-                    <span className="text-zinc-500 hidden sm:inline">[{log.clientIp}]</span>
+                  <div key={i} className="flex flex-wrap items-center gap-2 rounded bg-black/20 p-2 text-emerald-400 border-l border-emerald-500">
+                    <span className="text-emerald-500/50 shrink-0">[{log.timestamp?.split('T')[1]?.split('.')[0]}]</span>
+                    <span className="truncate flex-1 min-w-[120px]">SUCCESS: Data packet received</span>
+                    <div className="flex items-center gap-2 ml-auto">
+                      <span className="rounded bg-zinc-800 px-1 text-[9px] text-zinc-400 whitespace-nowrap">
+                        {log.itemCount} items
+                      </span>
+                      <span className="text-zinc-500 hidden sm:inline">[{log.clientIp}]</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -473,15 +485,15 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
               <div className="space-y-1.5 text-[11px] font-mono opacity-50 grayscale">
                 <p className="text-[9px] text-zinc-600 mb-1">Incoming Webhooks (External/Global):</p>
                 {recentWebhooks.map((log, i) => (
-                  <div key={i} className="flex items-center gap-3 rounded bg-black/10 p-2 text-zinc-500">
-                    <span>[{log.time?.split('T')[1]?.split('.')[0]}]</span>
-                    <span className="truncate">Global Webhook Detected (Pending Auth)</span>
+                  <div key={i} className="flex flex-wrap items-center gap-2 rounded bg-black/10 p-2 text-zinc-500">
+                    <span className="shrink-0">[{log.time?.split('T')[1]?.split('.')[0]}]</span>
+                    <span className="truncate flex-1 min-w-[120px]">Global Webhook Detected</span>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-zinc-800 p-4 text-center">
-                <p className="text-[10px] text-zinc-600 italic">Waiting for MetaTrader to send data... (Server is listening on /api/webhook/trade)</p>
+                <p className="text-[10px] text-zinc-600 italic">Waiting for MetaTrader to send data... (Server listening on /api/webhook/trade)</p>
               </div>
             )}
           </div>
@@ -577,25 +589,30 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
                 <Activity size={24} />
               </div>
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight">Trading Overview</h2>
-                <p className="text-sm text-zinc-400">Track your performance and goals</p>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 mb-0.5">
+                  <h2 className="text-lg sm:text-xl md:text-2xl font-bold tracking-tight truncate">Trading Overview</h2>
+                  {activeAccount && (
+                    <span className="shrink-0 flex items-center gap-1 text-[9px] sm:text-[10px] md:text-xs font-mono text-emerald-500 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 sm:px-2.5 py-0.5 rounded-full">
+                      <Database size={8} className="sm:w-2.5 sm:h-2.5" />
+                      #{activeAccount.accountNumber}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] sm:text-xs md:text-sm text-zinc-400">Track your performance and goals</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
-              {(['30d', '90d', 'all'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setTimeFilter(f)}
-                  className={cn(
-                    "rounded-lg px-4 py-1.5 text-xs font-bold uppercase transition-all",
-                    timeFilter === f ? "bg-emerald-500 text-zinc-950" : "text-zinc-400 hover:text-zinc-100"
-                  )}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+            <Dropdown
+              className="w-full sm:w-32"
+              options={[
+                { id: '30d', label: 'Last 30 Days' },
+                { id: '90d', label: 'Last 90 Days' },
+                { id: 'all', label: 'All Time' }
+              ]}
+              value={timeFilter}
+              onChange={(v) => setTimeFilter(v as any)}
+              triggerClassName="h-10 !bg-zinc-900/50 !border-zinc-800 hover:!border-zinc-700"
+            />
           </div>
 
           {/* AI Briefing */}
@@ -729,20 +746,20 @@ export default function Dashboard({ isDemoMode, onOpenTradeForm }: { isDemoMode:
                 const isNoTrade = isAfter(new Date(), subMinutes(eventDate, 30)) && isBefore(new Date(), addMinutes(eventDate, 30));
                 return (
                   <div key={i} className={cn(
-                    "flex items-center justify-between rounded-lg p-2 transition-colors",
+                    "flex flex-col sm:flex-row sm:items-center items-start justify-between rounded-lg p-3 sm:p-2 gap-2 transition-colors",
                     isNoTrade ? "bg-rose-500/10 border border-rose-500/20" : "bg-zinc-950/50"
                   )}>
                     <div className="flex flex-col flex-1 min-w-0">
                       <span className="text-[10px] font-bold text-zinc-500">{event.currency} • {format(eventDate, 'HH:mm')}</span>
-                      <span className="text-xs font-medium text-zinc-200 truncate">{event.event}</span>
+                      <span className="text-xs font-bold text-zinc-200 truncate">{event.event}</span>
                     </div>
                     {isNoTrade ? (
-                      <div className="flex items-center gap-1 text-rose-500 animate-pulse">
+                      <div className="flex items-center gap-1 text-rose-500 animate-pulse bg-rose-500/10 px-2 py-1 rounded-md sm:bg-transparent sm:p-0">
                         <ShieldAlert size={12} />
                         <span className="text-[10px] font-bold uppercase">Alert</span>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1 text-zinc-500">
+                      <div className="flex items-center gap-1 text-zinc-500 bg-zinc-800 px-2 py-1 rounded-md sm:bg-transparent sm:p-0">
                         <Clock size={12} />
                         <span className="text-[10px] font-bold uppercase">Soon</span>
                       </div>

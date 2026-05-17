@@ -8,6 +8,7 @@ import { formatCurrency, cn, calculateTradePnL } from '../lib/utils';
 import RiskCalculator from './RiskCalculator';
 import { generateContent, AI_MODELS } from '../services/aiService';
 import Markdown from 'react-markdown';
+import Dropdown from './Dropdown';
 
 interface TradeFormProps {
   userId: string;
@@ -278,15 +279,15 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Direction</label>
-                <select
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                <Dropdown
+                  label="Direction"
+                  options={[
+                    { id: 'LONG', label: 'Long' },
+                    { id: 'SHORT', label: 'Short' }
+                  ]}
                   value={formData.direction}
-                  onChange={(e) => setFormData({ ...formData, direction: e.target.value as TradeDirection })}
-                >
-                  <option value="LONG">Long</option>
-                  <option value="SHORT">Short</option>
-                </select>
+                  onChange={(v) => setFormData({ ...formData, direction: v as any })}
+                />
               </div>
             </div>
 
@@ -350,15 +351,15 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Status</label>
-                <select
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                <Dropdown
+                  label="Status"
+                  options={[
+                    { id: 'OPEN', label: 'Open' },
+                    { id: 'CLOSED', label: 'Closed' }
+                  ]}
                   value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value as TradeStatus })}
-                >
-                  <option value="OPEN">Open</option>
-                  <option value="CLOSED">Closed</option>
-                </select>
+                  onChange={(v) => setFormData({ ...formData, status: v as any })}
+                />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Exit Price (Optional)</label>
@@ -486,17 +487,17 @@ export default function TradeForm({ isDemoMode, onClose }: { isDemoMode: boolean
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Strategy</label>
-                <select
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                <Dropdown
+                  label="Strategy"
+                  placeholder="No Strategy"
+                  options={strategies.map(s => ({
+                    id: s.id,
+                    label: s.name,
+                    description: s.description
+                  }))}
                   value={formData.strategyId}
-                  onChange={(e) => setFormData({ ...formData, strategyId: e.target.value })}
-                >
-                  <option value="">No Strategy</option>
-                  {strategies.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
+                  onChange={(v) => setFormData({ ...formData, strategyId: v })}
+                />
               </div>
             </div>
 

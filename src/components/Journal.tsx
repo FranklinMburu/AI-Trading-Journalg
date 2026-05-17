@@ -7,6 +7,7 @@ import { format } from 'date-fns';
 import { cn, formatCurrency } from '../lib/utils';
 
 import { useAccount } from '../contexts/AccountContext';
+import Dropdown from './Dropdown';
 
 export default function Journal({ initialTradeId, onClearInitialTrade }: { initialTradeId?: string, onClearInitialTrade?: () => void }) {
   const { activeAccount, selectedAccountId, isDemoMode } = useAccount();
@@ -171,19 +172,18 @@ export default function Journal({ initialTradeId, onClearInitialTrade }: { initi
             </div>
 
             <div className="flex-1 space-y-3">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Link Trade</span>
-              <select
+              <Dropdown
+                label="Link Trade"
+                placeholder="No trade linked"
+                options={trades.map(trade => ({
+                  id: trade.id || '',
+                  label: `${trade.symbol} - ${trade.direction}`,
+                  description: format(new Date(trade.entryTime), 'MMM d, HH:mm'),
+                  icon: trade.direction === 'LONG' ? TrendingUp : TrendingDown
+                }))}
                 value={selectedTradeId}
-                onChange={(e) => setSelectedTradeId(e.target.value)}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="">No trade linked</option>
-                {trades.map(trade => (
-                  <option key={trade.id} value={trade.id}>
-                    {trade.symbol} - {trade.direction} ({format(new Date(trade.entryTime), 'MMM d, HH:mm')})
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedTradeId}
+              />
             </div>
           </div>
 
